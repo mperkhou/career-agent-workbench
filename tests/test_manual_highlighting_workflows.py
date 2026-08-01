@@ -179,7 +179,8 @@ class _FakeExecutor:
             target = action.removeprefix("timeout_replace_")
             if target == "executable":
                 executable = Path(command[0])
-                executable.unlink()
+                displaced = executable.with_name(f"{executable.name}.displaced")
+                executable.rename(displaced)
                 executable.write_text("#!/bin/sh\nexit 98\n", encoding="utf-8")
                 executable.chmod(0o700)
             elif target == "working":

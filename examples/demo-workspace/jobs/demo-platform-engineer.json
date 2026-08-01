@@ -1,0 +1,13 @@
+{
+  "job_id": "demo-platform-001",
+  "title": "Demo Platform Engineer",
+  "company": "Nimbus Quay Example Labs",
+  "location": "Example City, ZZ",
+  "listed_at": "2042-04-12",
+  "job_url": "https://jobs.example.test/demo-platform-engineer",
+  "workplace_type": "remote",
+  "source": "fictional_demo_public",
+  "description": "Nimbus Quay Example Labs seeks a Demo Platform Engineer to build reliable Python services, maintain SQLite-backed workflow state, add focused tests, and create useful observability for offline fictional systems. The role documents human review checkpoints and collaborates on clear operational runbooks.",
+  "seniority_level": "mid_senior",
+  "employment_type": "full_time"
+}

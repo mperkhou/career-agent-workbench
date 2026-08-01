@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import shlex
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+STATEFUL_TARGETS = (
+    "seed-jobs",
+    "audit-jods",
+    "generate-draft-resumes",
+    "regenerate-draft-resumes",
+    "regenerate-aro-objects",
+    "sync-draft-to-aro",
+    "refine-draft-resumes",
+    "highlight-draft-resumes",
+    "manual-pass-resumes",
+    "launch-website",
+)
+STATE_FLAGS = (
+    "--workspace",
+    "--database",
+    "--output-dir",
+    "--profile-dir",
+    "--master-resume",
+    "--master-resume-text",
+    "--blacklist-path",
+    "--tmp-dir",
+)
+PRIVATE_LITERALS = ("profile/", "output/", ".blacklist", "tmp/")
+BATCH_TARGETS = (
+    "generate-draft-resumes",
+    "regenerate-draft-resumes",
+    "regenerate-aro-objects",
+    "sync-draft-to-aro",
+    "highlight-draft-resumes",
+)
+
+
+def _dry_run(target: str, *variables: str) -> str:
+    completed = subprocess.run(
+        ["make", "-n", target, *variables],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+@pytest.mark.parametrize("target", STATEFUL_TARGETS)
+def test_default_stateful_make_targets_emit_no_private_state(target: str) -> None:
+    output = _dry_run(target)
+    for flag in STATE_FLAGS:
+        assert flag not in output
+    for literal in PRIVATE_LITERALS:
+        assert literal not in output
+
+
+def test_seed_make_overrides_emit_one_exact_flag_each() -> None:
+    output = _dry_run(
+        "seed-jobs",
+        "WORKSPACE=workspace-value",
+        "DATABASE=database-value",
+        "OUTPUT_DIR=output-value",
+        "PROFILE_DIR=profile-value",
+        "MASTER_RESUME=master-value",
+        "BLACKLIST=blacklist-value",
+    )
+    expected = {
+        "--workspace": "workspace-value",
+        "--database": "database-value",
+        "--output-dir": "output-value",
+        "--profile-dir": "profile-value",
+        "--master-resume": "master-value",
+        "--blacklist-path": "blacklist-value",
+    }
+    for flag, value in expected.items():
+        assert output.count(flag) == 1
+        assert value in output
+
+
+def test_web_make_overrides_emit_one_exact_flag_each() -> None:
+    output = _dry_run(
+        "launch-website",
+        "WORKSPACE=workspace-value",
+        "DATABASE=database-value",
+        "OUTPUT_DIR=output-value",
+        "PROFILE_DIR=profile-value",
+        "MASTER_RESUME=master-value",
+        "MASTER_RESUME_TEXT=source-value",
+        "BLACKLIST=blacklist-value",
+        "TMP_DIR=temporary-value",
+        "HOST=127.0.0.2",
+        "PORT=9876",
+    )
+    tokens = shlex.split(output)
+    expected = {
+        "--workspace": "workspace-value",
+        "--database": "database-value",
+        "--output-dir": "output-value",
+        "--profile-dir": "profile-value",
+        "--master-resume": "master-value",
+        "--master-resume-text": "source-value",
+        "--blacklist-path": "blacklist-value",
+        "--tmp-dir": "temporary-value",
+        "--host": "127.0.0.2",
+        "--port": "9876",
+    }
+    for flag, value in expected.items():
+        assert tokens.count(flag) == 1
+        assert value in tokens
+
+
+def test_model_and_remaining_path_overrides_are_presence_aware() -> None:
+    output = _dry_run(
+        "highlight-draft-resumes",
+        "WORKSPACE=workspace-value",
+        "DATABASE=database-value",
+        "OUTPUT_DIR=output-value",
+        "MASTER_RESUME=master-value",
+        "MASTER_RESUME_TEXT=source-value",
+        "TMP_DIR=temporary-value",
+        "CODEX_MODEL=shared-model",
+        "HIGHLIGHT_CODEX_MODEL=workflow-model",
+        "CODEX_REASONING_EFFORT=shared-effort",
+        "HIGHLIGHT_CODEX_REASONING_EFFORT=workflow-effort",
+    )
+    tokens = shlex.split(output)
+    for flag in (
+        "--workspace",
+        "--database",
+        "--output-dir",
+        "--master-resume",
+        "--master-resume-text",
+        "--tmp-dir",
+        "--codex-model",
+        "--codex-reasoning-effort",
+    ):
+        assert tokens.count(flag) == 1
+    assert "workflow-model" in output and "shared-model" not in output
+    assert "workflow-effort" in output and "shared-effort" not in output
+
+
+@pytest.mark.parametrize("target", BATCH_TARGETS)
+@pytest.mark.parametrize("selection", [None, "", "all"])
+def test_batch_make_all_selectors_emit_no_job_id(
+    target: str,
+    selection: str | None,
+) -> None:
+    variables = () if selection is None else (f"JOB_IDS={selection}",)
+    assert "--job-id" not in shlex.split(_dry_run(target, *variables))
+
+
+@pytest.mark.parametrize("target", BATCH_TARGETS)
+def test_batch_make_explicit_ids_emit_one_flag_per_token(target: str) -> None:
+    tokens = shlex.split(_dry_run(target, "JOB_IDS=fictional-a fictional-b"))
+    assert tokens.count("--job-id") == 2
+    assert "fictional-a" in tokens and "fictional-b" in tokens
+
+
+@pytest.mark.parametrize("selection", [None, "", "all"])
+def test_refinement_make_all_selectors_emit_all_active_once(
+    selection: str | None,
+) -> None:
+    variables = () if selection is None else (f"JOB_IDS={selection}",)
+    tokens = shlex.split(_dry_run("refine-draft-resumes", *variables))
+    assert tokens.count("--all-active") == 1
+    assert "--job-id" not in tokens
+
+
+def test_refinement_make_explicit_ids_exclude_all_active() -> None:
+    tokens = shlex.split(
+        _dry_run("refine-draft-resumes", "JOB_IDS=fictional-a fictional-b")
+    )
+    assert tokens.count("--job-id") == 2
+    assert "--all-active" not in tokens
+
+
+@pytest.mark.parametrize("selection", [None, "", "all"])
+def test_manual_make_all_selectors_stop_before_python(
+    selection: str | None,
+) -> None:
+    variables = () if selection is None else (f"JOB_IDS={selection}",)
+    output = _dry_run("manual-pass-resumes", *variables)
+    assert "application_resume_manual_pass.py" not in output
+    assert "explicit job IDs" in output
+
+
+@pytest.mark.parametrize("selection", ["", "all"])
+def test_manual_make_guard_fails_before_command_execution(selection: str) -> None:
+    completed = subprocess.run(
+        [
+            "make",
+            "manual-pass-resumes",
+            f"JOB_IDS={selection}",
+            "PYTHON=python-boundary-must-not-run",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 2
+    assert "explicit job IDs" in completed.stderr
+    assert "python-boundary-must-not-run" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("variables", "expected_model", "expected_effort"),
+    [
+        (
+            (
+                "CODEX_MODEL=shared-model",
+                "CODEX_REASONING_EFFORT=shared-effort",
+                "MANUAL_PASS_CODEX_MODEL=workflow-model",
+                "MANUAL_PASS_CODEX_REASONING_EFFORT=workflow-effort",
+            ),
+            "workflow-model",
+            "workflow-effort",
+        ),
+        (
+            ("CODEX_MODEL=shared-model", "CODEX_REASONING_EFFORT=shared-effort"),
+            "shared-model",
+            "shared-effort",
+        ),
+        ((), None, None),
+    ],
+)
+def test_manual_model_and_effort_precedence(
+    variables: tuple[str, ...],
+    expected_model: str | None,
+    expected_effort: str | None,
+) -> None:
+    tokens = shlex.split(
+        _dry_run("manual-pass-resumes", "JOB_IDS=fictional-job", *variables)
+    )
+    assert tokens.count("--codex-model") == int(expected_model is not None)
+    assert tokens.count("--codex-reasoning-effort") == int(expected_effort is not None)
+    if expected_model is not None:
+        assert expected_model in tokens
+    if expected_effort is not None:
+        assert expected_effort in tokens
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["regenerate-resumes", "regenerate-resume-variants"],
+)
+def test_regeneration_aliases_preserve_all_and_explicit_selection(target: str) -> None:
+    default_tokens = shlex.split(_dry_run(target))
+    assert default_tokens.count("--all-active") == 1
+    assert "--job-id" not in default_tokens
+
+    explicit_tokens = shlex.split(_dry_run(target, "JOB_IDS=fictional-a fictional-b"))
+    assert explicit_tokens.count("--job-id") == 4
+    assert "--all-active" not in explicit_tokens
+
+
+def test_second_pass_alias_preserves_all_selection() -> None:
+    tokens = shlex.split(_dry_run("second-pass-refinement"))
+    assert tokens.count("--all-active") == 1
+    assert "--job-id" not in tokens

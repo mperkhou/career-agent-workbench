@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ data.header_top.line_1_name_header_text | default("Resume", true) }} - Resume</title>
+  <style>
+    @page {
+      size: Letter;
+      margin: 0.805in 0.75in 0.722in;
+    }
+
+    :root {
+      --accent: #047857;
+      --rule: #57ba86;
+      --body: #111827;
+      --muted: #475569;
+      --paper: #ffffff;
+      --screen: #eef2f0;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--screen);
+      color: var(--body);
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 9.4pt;
+      line-height: 11.2pt;
+    }
+    a { color: inherit; text-decoration: none; }
+    .resume-page {
+      width: 8.5in;
+      min-height: 11in;
+      margin: 24px auto;
+      padding: 0.805in 0.75in 0.722in;
+      background: var(--paper);
+    }
+    .top-rule, .section-rule { width: 100%; background: var(--rule); }
+    .top-rule { height: 2pt; margin: 0 0 12pt; }
+    .section-rule { height: 1.35pt; margin: 0 0 8pt; }
+    .resume-name {
+      margin: 0 0 5pt;
+      color: var(--accent);
+      font-size: 13.2pt;
+      line-height: 15.4pt;
+    }
+    .resume-headline, .resume-contact, .job-title, .job-intro {
+      color: var(--muted);
+    }
+    .resume-headline, .resume-contact { margin: 0 0 6pt; font-weight: 700; }
+    .contact-separator { display: inline-block; padding: 0 3pt; }
+    .resume-section { margin: 9pt 0 0; }
+    .resume-section.with-rule { margin-top: 14pt; }
+    .section-heading {
+      margin: 0 0 6pt;
+      color: var(--accent);
+      font-size: 12.2pt;
+      line-height: 14.2pt;
+    }
+    p { margin: 0 0 2pt; }
+    .summary-note { color: var(--muted); font-style: italic; }
+    .bullet-list { margin: 0; padding: 0; list-style: none; }
+    .bullet-list > li {
+      position: relative;
+      margin: 0 0 1pt;
+      padding-left: 0.32in;
+    }
+    .bullet-list > li::before {
+      content: "\2022";
+      position: absolute;
+      left: 0.03in;
+    }
+    .job + .job { margin-top: 9pt; }
+    .job-company { margin: 0 0 5pt; font-size: 9.5pt; }
+    .job-title { margin: 0 0 8pt; font-weight: 700; }
+    .job-dates, .job-intro { font-style: italic; }
+    .job-intro { margin: -4pt 0 5pt; }
+    @media print {
+      body { background: var(--paper); }
+      .resume-page { width: auto; min-height: auto; margin: 0; padding: 0; }
+      .education-item { break-inside: avoid; }
+      .resume-supporting-page { break-before: page; page-break-before: always; }
+    }
+  </style>
+</head>
+<body>
+  {% set layout = data.resume_layout | default({}) %}
+  {% set header = data.header_top | default({}) %}
+  {% set summary = data.professional_summary | default({}) %}
+  {% set skills = data.core_technical_skills | default({}) %}
+  {% set experience = data.professional_experience | default({}) %}
+  {% set education = data.education | default(data.education_and_certifications | default({}), true) %}
+  {% set certifications = data.certifications | default({}) %}
+  {% set portfolio = data.portfolio | default({}) %}
+
+  {% macro linked(value) -%}
+    {{- value | default("", true) | linkify -}}
+  {%- endmacro %}
+
+  {% macro bullet_text(bullet) -%}
+    {%- if bullet is string -%}
+      {{- bullet | rich_text -}}
+    {%- else -%}
+      {%- set label = bullet.bold_label | default(bullet.category | default("", true), true) -%}
+      {%- set body = bullet.text | default("", true) -%}
+      {%- if not body %}{% set body = bullet | render_skill_items %}{% endif -%}
+      {%- if not body %}{% set body = bullet.rendered_text | default("", true) %}{% endif -%}
+      {%- if label %}<strong>{{ label }}:</strong>{% endif -%}
+      {%- if body %} {{ body | rich_text }}{% endif -%}
+    {%- endif -%}
+  {%- endmacro %}
+
+  <main class="resume-page">
+    <div class="top-rule"></div>
+    {% if header.render | default(true) %}
+      <header>
+        <h1 class="resume-name">{{ header.line_1_name_header_text | default("", true) }}</h1>
+        {% if header.line_2_header_text | default("", true) %}
+          <p class="resume-headline">{{ header.line_2_header_text | rich_text }}</p>
+        {% endif %}
+        <p class="resume-contact">
+          {% set links = header.links | default([]) %}
+          {% set contact_items = header.contact_items | default([]) %}
+          {% set applicant_info = header.line_3_applicant_info_text | default("", true) %}
+          {% if not applicant_info %}
+            {% set applicant_info = header.line_2_applicant_info_text | default("", true) %}
+          {% endif %}
+          {% if contact_items %}
+            {% for item in contact_items %}
+              {% set matched = namespace(url="") %}
+              {% for link in links %}
+                {% if item == link.label %}{% set matched.url = link.url | safe_url %}{% endif %}
+              {% endfor %}
+              {% if matched.url %}
+                <a href="{{ matched.url }}">{{ item }}</a>
+              {% else %}
+                {{ item }}
+              {% endif %}
+              {% if not loop.last %}<span class="contact-separator">|</span>{% endif %}
+            {% endfor %}
+          {% elif applicant_info %}
+            {{ applicant_info | rich_text }}
+          {% endif %}
+        </p>
+      </header>
+    {% endif %}
+
+    {% if summary.render | default(true) and (summary.paragraph | default("", true) or summary.summary_note | default("", true)) %}
+      <section class="resume-section">
+        <h2 class="section-heading">{{ summary.header_text | default("Professional Summary", true) }}</h2>
+        {% if summary.paragraph | default("", true) %}<p>{{ summary.paragraph | rich_text }}</p>{% endif %}
+        {% if summary.summary_note | default("", true) %}<p class="summary-note">{{ summary.summary_note | rich_text }}</p>{% endif %}
+      </section>
+    {% endif %}
+
+    {% set skill_rows = skills | render_core_skill_rows %}
+    {% if skills.render | default(true) and skill_rows %}
+      <section class="resume-section">
+        <h2 class="section-heading">{{ skills.header_text | default("Core Technical Skills", true) }}</h2>
+        <ul class="bullet-list">
+          {% for row in skill_rows %}
+            <li>{% if row.category %}<strong>{{ row.category }}:</strong>{% endif %}{% if row.text %} {{ row.text | rich_text }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    {% set jobs = experience.jobs | default([]) %}
+    {% if experience.render | default(true) and jobs %}
+      <section class="resume-section with-rule">
+        <div class="section-rule"></div>
+        <h2 class="section-heading">{{ experience.header_text | default("Professional Experience", true) }}</h2>
+        {% for job in jobs if job.render | default(true) %}
+          {% set line_1 = job.line_1 | default({}) %}
+          {% set line_2 = job.line_2 | default({}) %}
+          <article class="job">
+            {% if line_1.company_name_text | default("", true) %}
+              <h3 class="job-company">{{ line_1.company_name_text }}</h3>
+            {% endif %}
+            {% if line_1.position_name_text | default("", true) or line_1.position_dates_text | default("", true) %}
+              <p class="job-title">
+                {{ line_1.position_name_text | default("", true) }}
+                {% if line_1.position_dates_text | default("", true) %}
+                  | <span class="job-dates">{{ line_1.position_dates_text }}</span>
+                {% endif %}
+              </p>
+            {% endif %}
+            {% if line_2.position_intro_text | default("", true) %}
+              <p class="job-intro">{{ line_2.position_intro_text | rich_text }}</p>
+            {% endif %}
+            {% set job_bullets = job.bullet_points | default([]) %}
+            {% if job_bullets %}
+              <ul class="bullet-list">
+                {% for bullet in job_bullets if bullet is string or (bullet.render | default(true)) %}
+                  <li>{{ bullet_text(bullet) }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    {% set education_items = education.entries | default(education.get("items", []) if education.get is defined else []) %}
+    {% set certification_bullets = certifications.bullet_points | default([]) %}
+    {% set projects = portfolio.projects | default([]) %}
+    {% set education_rendered = education.render | default(true) and education_items %}
+    {% set certifications_rendered = certifications.render | default(true) and certification_bullets %}
+    {% set portfolio_rendered = portfolio.render | default(true) and projects %}
+    {% if education_rendered or certifications_rendered or portfolio_rendered %}
+      <div class="resume-supporting-sections{% if layout.supporting_sections_start_on_page_2 | default(false) %} resume-supporting-page{% endif %}">
+        {% if education_rendered %}
+          <section class="resume-section with-rule">
+            <div class="section-rule"></div>
+            <h2 class="section-heading">{{ education.header_text | default("Education", true) }}</h2>
+            {% for item in education_items if item is string or (item.render | default(true)) %}
+              {% set details = item.details | default([]) %}
+              {% set line_1 = item.line_1 | default({}) %}
+              {% set line_2 = item.line_2 | default({}) %}
+              <article class="job education-item">
+                {% if item is string %}
+                  <h3 class="job-company">{{ item | rich_text }}</h3>
+                {% elif details %}
+                  {% if item.title | default("", true) %}<h3 class="job-company">{{ item.title | rich_text }}</h3>{% endif %}
+                  <p class="job-title">{{ details[0] | rich_text }}</p>
+                {% elif line_1.institution_name_text | default("", true) or line_2.degree_name_text | default("", true) %}
+                  {% if line_1.institution_name_text | default("", true) %}<h3 class="job-company">{{ line_1.institution_name_text | rich_text }}</h3>{% endif %}
+                  <p class="job-title">
+                    {{ line_2.degree_name_text | default("", true) }}
+                    {% if line_2.degree_dates_text | default("", true) %}| <span class="job-dates">{{ line_2.degree_dates_text }}</span>{% endif %}
+                  </p>
+                {% else %}
+                  <h3 class="job-company">{{ item.title | default(item.rendered_text | default("", true), true) | rich_text }}</h3>
+                {% endif %}
+                {% set entry_bullets = item.bullet_points | default([]) %}
+                {% set sub_items = item.sub_items | default([]) %}
+                {% if entry_bullets %}
+                  <ul class="bullet-list">
+                    {% for entry_bullet in entry_bullets if entry_bullet is string or (entry_bullet.render | default(true)) %}
+                      <li>{{ bullet_text(entry_bullet) }}</li>
+                    {% endfor %}
+                  </ul>
+                {% elif sub_items %}
+                  <ul class="bullet-list">
+                    {% for sub_item in sub_items %}
+                      <li>{% if sub_item.label | default("", true) %}<em>{{ sub_item.label }}:</em>{% endif %} {{ sub_item.text | default(sub_item, true) | rich_text }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </article>
+            {% endfor %}
+          </section>
+        {% endif %}
+
+        {% if certifications_rendered %}
+          <section class="resume-section">
+            <h2 class="section-heading">{{ certifications.header_text | default("Certifications", true) }}</h2>
+            <ul class="bullet-list">
+              {% for bullet in certification_bullets if bullet is string or (bullet.render | default(true)) %}
+                <li>{{ bullet_text(bullet) }}</li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endif %}
+
+        {% if portfolio_rendered %}
+          <section class="resume-section">
+            <h2 class="section-heading">{{ portfolio.header_text | default("Portfolio", true) }}</h2>
+            <ul class="bullet-list">
+              {% for project in projects if project is string or (project.render | default(true)) %}
+                <li>
+                  {% if project is string %}
+                    {{ project | rich_text }}
+                  {% else %}
+                    {% set title = project.title_text | default(project.title | default("", true), true) %}
+                    {% set url = project.url | default("", true) %}
+                    {% set description = project.description_text | default(project.description | default("", true), true) %}
+                    {% if title %}<strong>{{ title }}:</strong>{% endif %}
+                    {% if url %} {{ linked(url) }}{% endif %}
+                    {% if description %} - {{ description | rich_text }}{% endif %}
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endif %}
+      </div>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">ARO resume variant workflow</title>
+  <desc id="desc">A map of the default application resume workflow: seed a tracker row, generate the v1 draft, run GLM 5.2 v2 refinement, optionally run Codex manual pass or highlighting, then compare and reversibly select variants in the Flask tracker.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .lane { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .laneMain { fill: #f0fdfa; stroke: #0f766e; stroke-width: 1.5; }
+      .laneReview { fill: #eef2ff; stroke: #4f46e5; stroke-width: 1.5; }
+      .seed { fill: #ccfbf1; stroke: #0f766e; stroke-width: 2; }
+      .draft { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+      .refine { fill: #ede9fe; stroke: #7c3aed; stroke-width: 2; }
+      .optional { fill: #fef3c7; stroke: #b45309; stroke-width: 2; }
+      .review { fill: #e0e7ff; stroke: #4338ca; stroke-width: 2; }
+      .select { fill: #dcfce7; stroke: #166534; stroke-width: 2; }
+      .store { fill: #f1f5f9; stroke: #475569; stroke-width: 2; }
+      .numSeed { fill: #0f766e; }
+      .numDraft { fill: #2563eb; }
+      .numRefine { fill: #7c3aed; }
+      .numOptional { fill: #b45309; }
+      .numReview { fill: #4338ca; }
+      .numSelect { fill: #166534; }
+      .numStore { fill: #475569; }
+      .arrow { stroke: #64748b; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .softArrow { stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 6 6; fill: none; marker-end: url(#arrow); }
+      .title { font: 700 22px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 15px Arial, sans-serif; fill: #475569; }
+      .laneTitle { font: 700 16px Arial, sans-serif; fill: #334155; letter-spacing: 0; }
+      .cardTitle { font: 700 15px Arial, sans-serif; fill: #0f172a; }
+      .body { font: 13px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 12px Arial, sans-serif; fill: #64748b; }
+      .badge { font: 700 12px Arial, sans-serif; fill: #ffffff; }
+      .numText { font: 700 14px Arial, sans-serif; fill: #ffffff; dominant-baseline: central; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="720" />
+  <text class="title" x="36" y="42">Database-Backed Resume Variant Workflow</text>
+  <text class="subtitle" x="36" y="68">Default path: seed rows, generate Draft v1, run Refined v2, then compare and select in the tracker.</text>
+  <text class="subtitle" x="36" y="88">Manual pass and highlighting are deliberate add-on stages; selection only updates the active resume links.</text>
+
+  <rect class="lane" x="34" y="116" width="1212" height="112" rx="18" />
+  <text class="laneTitle" x="58" y="146">1. Discover And Seed Tracker Rows</text>
+
+  <rect class="seed" x="58" y="166" width="240" height="42" rx="12" />
+  <circle class="numSeed" cx="82" cy="187" r="14" />
+  <text class="numText" x="82" y="188">1</text>
+  <text class="cardTitle" x="108" y="192">Plan public searches</text>
+
+  <path class="arrow" d="M 304 187 L 342 187" />
+
+  <rect class="seed" x="350" y="166" width="240" height="42" rx="12" />
+  <circle class="numSeed" cx="374" cy="187" r="14" />
+  <text class="numText" x="374" y="188">2</text>
+  <text class="cardTitle" x="400" y="192">Fetch postings</text>
+
+  <path class="arrow" d="M 596 187 L 634 187" />
+
+  <rect class="seed" x="642" y="166" width="240" height="42" rx="12" />
+  <circle class="numSeed" cx="666" cy="187" r="14" />
+  <text class="numText" x="666" y="188">3</text>
+  <text class="cardTitle" x="692" y="192">Trim raw/prompt JOD</text>
+
+  <path class="arrow" d="M 888 187 L 926 187" />
+
+  <rect class="store" x="934" y="154" width="264" height="66" rx="12" />
+  <circle class="numStore" cx="958" cy="187" r="14" />
+  <text class="numText" x="958" y="188">4</text>
+  <text class="cardTitle" x="984" y="178">Seed SQLite row</text>
+  <text class="body" x="984" y="196">Store URL, status, raw JOD,</text>
+  <text class="body" x="984" y="211">and prompt-ready JOD</text>
+
+  <rect class="laneMain" x="34" y="252" width="1212" height="136" rx="18" />
+  <text class="laneTitle" x="58" y="282">2. Generate Draft v1</text>
+
+  <rect class="draft" x="58" y="306" width="250" height="58" rx="12" />
+  <circle class="numDraft" cx="84" cy="335" r="15" />
+  <text class="numText" x="84" y="336">5</text>
+  <text class="cardTitle" x="110" y="329">Clone MRO into ARO</text>
+  <text class="body" x="110" y="347">Start from structured evidence</text>
+
+  <path class="arrow" d="M 314 335 L 348 335" />
+
+  <rect class="draft" x="356" y="306" width="250" height="58" rx="12" />
+  <circle class="numDraft" cx="382" cy="335" r="15" />
+  <text class="numText" x="382" y="336">6</text>
+  <text class="cardTitle" x="408" y="329">Match skills and targets</text>
+  <text class="body" x="408" y="347">GLM 5.2 reads prompt JOD</text>
+
+  <path class="arrow" d="M 612 335 L 646 335" />
+
+  <rect class="draft" x="654" y="306" width="250" height="58" rx="12" />
+  <circle class="numDraft" cx="680" cy="335" r="15" />
+  <text class="numText" x="680" y="336">7</text>
+  <text class="cardTitle" x="706" y="329">Rewrite from evidence</text>
+  <text class="body" x="706" y="347">Render role-specific bullets</text>
+
+  <path class="arrow" d="M 910 335 L 944 335" />
+
+  <rect class="store" x="952" y="294" width="246" height="82" rx="12" />
+  <circle class="numStore" cx="978" cy="335" r="15" />
+  <text class="numText" x="978" y="336">8</text>
+  <text class="cardTitle" x="1004" y="320">Store Draft v1</text>
+  <text class="body" x="1004" y="338">ARO YAML, HTML, PDF,</text>
+  <text class="body" x="1004" y="353">ATS fields, and diagnostics</text>
+  <text class="tiny" x="1004" y="368">Variant key: v1</text>
+
+  <rect class="laneMain" x="34" y="420" width="1212" height="142" rx="18" />
+  <text class="laneTitle" x="58" y="450">3. Default v2 Refinement And Optional Review Passes</text>
+
+  <rect class="refine" x="58" y="474" width="268" height="66" rx="12" />
+  <circle class="numRefine" cx="84" cy="507" r="15" />
+  <text class="numText" x="84" y="508">9</text>
+  <text class="cardTitle" x="110" y="498">Run GLM 5.2 second pass</text>
+  <text class="body" x="110" y="516">Critique v1 and validate patches</text>
+  <text class="tiny" x="110" y="531">Default in regenerate-resumes</text>
+
+  <path class="arrow" d="M 332 507 L 366 507" />
+
+  <rect class="store" x="374" y="474" width="230" height="66" rx="12" />
+  <circle class="numStore" cx="400" cy="507" r="15" />
+  <text class="numText" x="400" y="508">10</text>
+  <text class="cardTitle" x="426" y="498">Store Refined v2</text>
+  <text class="body" x="426" y="516">Keep critique, validation, ATS</text>
+  <text class="tiny" x="426" y="531">Variant key: v2</text>
+
+  <path class="softArrow" d="M 612 507 L 646 507" />
+
+  <rect class="optional" x="654" y="474" width="234" height="66" rx="12" />
+  <circle class="numOptional" cx="680" cy="507" r="15" />
+  <text class="numText" x="680" y="508">11</text>
+  <text class="cardTitle" x="706" y="498">Optional manual pass</text>
+  <text class="body" x="706" y="516">Codex reviews v1, v2, JOD,</text>
+  <text class="tiny" x="706" y="531">and evidence into manual variant</text>
+
+  <path class="softArrow" d="M 896 507 L 930 507" />
+
+  <rect class="optional" x="938" y="474" width="260" height="66" rx="12" />
+  <circle class="numOptional" cx="964" cy="507" r="15" />
+  <text class="numText" x="964" y="508">12</text>
+  <text class="cardTitle" x="990" y="498">Optional highlighting</text>
+  <text class="body" x="990" y="516">Validated Codex patches add only</text>
+  <text class="tiny" x="990" y="531">selective strong tags</text>
+
+  <rect class="laneReview" x="34" y="592" width="1212" height="102" rx="18" />
+  <text class="laneTitle" x="58" y="622">4. Review, Select, And Keep It Reversible</text>
+
+  <rect class="review" x="58" y="640" width="318" height="42" rx="12" />
+  <circle class="numReview" cx="82" cy="661" r="13" />
+  <text class="numText" x="82" y="662">13</text>
+  <text class="cardTitle" x="108" y="656">Compare variants</text>
+  <text class="body" x="108" y="674">ATS deltas, gaps, and ARO diff</text>
+
+  <path class="arrow" d="M 382 661 L 418 661" />
+
+  <rect class="select" x="426" y="640" width="296" height="42" rx="12" />
+  <circle class="numSelect" cx="450" cy="661" r="13" />
+  <text class="numText" x="450" y="662">14</text>
+  <text class="cardTitle" x="476" y="656">Select active draft</text>
+  <text class="body" x="476" y="674">Draft v1, Refined v2, or Manual</text>
+
+  <path class="arrow" d="M 728 661 L 764 661" />
+
+  <rect class="select" x="772" y="640" width="426" height="42" rx="12" />
+  <circle class="numSelect" cx="796" cy="661" r="13" />
+  <text class="numText" x="796" y="662">15</text>
+  <text class="cardTitle" x="822" y="656">Update active resume links</text>
+  <text class="body" x="822" y="674">Stored variants remain available</text>
+</svg>

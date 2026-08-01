@@ -1,0 +1,7 @@
+Avery Demo is a fictional platform builder at avery.demo@example.test.
+
+Avery builds reliable Python and Flask services, SQLite-backed workflows,
+automated tests, and readable observability views. At Nimbus Quay Example Labs
+from 2040 to 2042, Avery built service checks for a fictional platform lab. At
+Cedar & Comet Example Cooperative from 2038 to 2040, Avery maintained demo
+workflows and documented their human review steps.

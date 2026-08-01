@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Career Agent Workbench</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #f4f6fa; color: #172033; }
+      main { width: min(1120px, calc(100% - 2rem)); margin: 2rem auto; }
+      header, section { background: white; border: 1px solid #dce2ec; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+      h1, h2 { margin-top: 0; }
+      .scope, .actions { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
+      a, button { color: #174ea6; }
+      .scope a[aria-current="page"] { font-weight: 700; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: .7rem; text-align: left; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
+      th { color: #566176; font-size: .85rem; }
+      button { border: 0; border-radius: 8px; padding: .65rem .9rem; background: #174ea6; color: white; font-weight: 700; }
+      select { padding: .55rem; max-width: 24rem; }
+      .muted { color: #687386; }
+      .status-list { display: grid; gap: .5rem; padding: 0; list-style: none; }
+      .status-list li { padding: .7rem; border-radius: 8px; background: #f6f8fb; }
+      @media (max-width: 760px) { table { display: block; overflow-x: auto; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Career Agent Workbench</h1>
+        <p class="muted">Local tracker review and explicitly selected workflow actions.</p>
+        <nav class="scope" aria-label="Application scope">
+          {% for value in ("active", "archived", "all") %}
+            <a href="/?scope={{ value }}" {% if scope == value %}aria-current="page"{% endif %}>{{ value|title }}</a>
+          {% endfor %}
+        </nav>
+      </header>
+
+      <form action="/actions/run" method="post">
+        <section>
+          <h2>Applications</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Select</th><th>Job</th><th>Company</th><th>Title</th>
+                <th>Source</th><th>Status</th><th>Resume</th><th>ATS</th><th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for application in applications %}
+                <tr>
+                  <td><input type="checkbox" name="job_id" value="{{ application.job_id }}" aria-label="Select {{ application.job_id }}"></td>
+                  <td>{{ application.job_id }}</td>
+                  <td>{{ application.company }}</td>
+                  <td><a href="{{ application.job_url }}">{{ application.job_title }}</a></td>
+                  <td>{{ application.source or "—" }}</td>
+                  <td>{{ application.applied_to }}</td>
+                  <td>{{ application.selected_resume_variant or "—" }}</td>
+                  <td>{{ application.ats.score if application.ats.score is not none else "—" }}</td>
+                  <td>{{ application.updated_at }}</td>
+                </tr>
+              {% else %}
+                <tr><td colspan="9" class="muted">No applications in this scope.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2>Run an action</h2>
+          <div class="actions">
+            <label for="target">Workflow</label>
+            <select id="target" name="target" required>
+              {% for value, label in targets.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+            <button type="submit">Run selected</button>
+          </div>
+        </section>
+      </form>
+
+      <section id="action-status">
+        <h2>Action status</h2>
+        <ul class="status-list">
+          {% for action in actions %}
+            <li><strong>{{ action.target }}</strong> — {{ action.status }} · {{ action.message }}</li>
+          {% else %}
+            <li class="muted">No actions started in this app session.</li>
+          {% endfor %}
+        </ul>
+        <a href="/actions/status">View status JSON</a>
+      </section>
+    </main>
+  </body>
+</html>

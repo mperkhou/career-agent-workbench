@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="390" viewBox="0 0 1180 390" role="img" aria-labelledby="title desc">
+  <title id="title">Master resume object build workflow</title>
+  <desc id="desc">A card-based map showing how the master resume text becomes the structured MASTER-RESUME.yml object with factual evidence and skill linkages.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .step1 { fill: #ccfbf1; stroke: #0f766e; stroke-width: 2; }
+      .step2 { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+      .step3 { fill: #ede9fe; stroke: #7c3aed; stroke-width: 2; }
+      .step4 { fill: #fce7f3; stroke: #be185d; stroke-width: 2; }
+      .num1 { fill: #0f766e; }
+      .num2 { fill: #2563eb; }
+      .num3 { fill: #7c3aed; }
+      .num4 { fill: #be185d; }
+      .numText { font: 700 14px Arial, sans-serif; fill: #ffffff; dominant-baseline: central; text-anchor: middle; }
+      .title { font: 700 22px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 15px Arial, sans-serif; fill: #475569; }
+      .cardTitle { font: 700 16px Arial, sans-serif; fill: #0f172a; }
+      .body { font: 14px Arial, sans-serif; fill: #475569; }
+      .note { font: 14px Arial, sans-serif; fill: #0f766e; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1180" height="390" />
+  <text class="title" x="34" y="42">Build The Master Resume Object</text>
+  <text class="subtitle" x="34" y="68">This initialization stage happens before search or tailoring. It keeps the reusable source evidence factual and reviewable.</text>
+
+  <rect class="panel" x="34" y="104" width="1112" height="196" rx="18" />
+
+  <rect class="step1" x="62" y="138" width="238" height="126" rx="14" />
+  <circle class="num1" cx="90" cy="169" r="16" />
+  <text class="numText" x="90" y="170">1</text>
+  <text class="cardTitle" x="118" y="164">Master text</text>
+  <text class="body" x="86" y="194">profile/MP-MASTER-</text>
+  <text class="body" x="86" y="216">RESUME.txt</text>
+  <text class="body" x="86" y="242">Human-maintained source</text>
+
+  <rect class="step2" x="326" y="138" width="238" height="126" rx="14" />
+  <circle class="num2" cx="354" cy="169" r="16" />
+  <text class="numText" x="354" y="170">2</text>
+  <text class="cardTitle" x="382" y="164">Structured setup</text>
+  <text class="body" x="350" y="194">Parse sections, preserve</text>
+  <text class="body" x="350" y="216">evidence wording, and set</text>
+  <text class="body" x="350" y="238">render controls</text>
+
+  <rect class="step3" x="590" y="120" width="250" height="162" rx="14" />
+  <circle class="num3" cx="618" cy="151" r="16" />
+  <text class="numText" x="618" y="152">3</text>
+  <text class="cardTitle" x="646" y="146">MASTER-RESUME.yml</text>
+  <text class="body" x="614" y="176">Header and profile fields</text>
+  <text class="body" x="614" y="199">Core Technical Skills</text>
+  <text class="body" x="614" y="222">Experience evidence</text>
+  <text class="body" x="614" y="245">Bullet limits and render flags</text>
+
+  <rect class="step4" x="866" y="138" width="238" height="126" rx="14" />
+  <circle class="num4" cx="894" cy="169" r="16" />
+  <text class="numText" x="894" y="170">4</text>
+  <text class="cardTitle" x="922" y="164">Evidence links</text>
+  <text class="body" x="890" y="194">Category and skill hints</text>
+  <text class="body" x="890" y="216">are grounded in source</text>
+  <text class="body" x="890" y="238">text, not padded keywords</text>
+
+  <rect class="panel" x="166" y="322" width="848" height="38" rx="19" />
+  <text class="note" x="240" y="346">Review loop: keep Core Technical Skills, experience evidence, and category hints aligned before per-job ARO generation.</text>
+</svg>

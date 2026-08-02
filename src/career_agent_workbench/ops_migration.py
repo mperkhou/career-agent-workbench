@@ -90,6 +90,7 @@ class MigrationValidationResult:
     migrated_query_outcome_count: int
     existing_table_row_counts_equal: bool
     selection_equal: bool
+    invalid_auto_selection_normalized_count: int
     lineage_equal: bool
     lineage_valid: bool
     jod_presence_equal: bool
@@ -104,6 +105,7 @@ class _DatabaseEvidence:
     counts: DatabaseCounts
     schema: Mapping[str, frozenset[str]] = field(repr=False)
     row_counts: Mapping[str, int] = field(repr=False)
+    selection_rows: tuple[tuple[Any, Any, Any, bool], ...] = field(repr=False)
     selection_digest: bytes = field(repr=False)
     lineage_digest: bytes = field(repr=False)
     artifact_digest: bytes = field(repr=False)
@@ -393,17 +395,37 @@ def _inspect(database: Path) -> _DatabaseEvidence:
             "selected_resume_variant",
             "resume_variant_selection_mode",
         } <= columns
-        selections = (
-            connection.execute(
-                "SELECT job_id, selected_resume_variant, resume_variant_selection_mode "
-                "FROM applications WHERE selected_resume_variant IS NOT NULL "
-                "AND TRIM(selected_resume_variant) != '' "
-                "ORDER BY job_id COLLATE BINARY"
-            ).fetchall()
-            if selection_supported
-            else ()
-        )
         variant_columns = schema.get("application_resume_variants", frozenset())
+        selection_variant_supported = {"job_id", "variant_key"} <= variant_columns
+        if selection_supported:
+            selected_variant_exists = (
+                "EXISTS (SELECT 1 FROM application_resume_variants AS variant "
+                "WHERE variant.job_id = app.job_id "
+                "AND variant.variant_key = app.selected_resume_variant)"
+                if selection_variant_supported
+                else "0"
+            )
+            raw_selection_rows = connection.execute(
+                "SELECT app.job_id, app.selected_resume_variant, "
+                "app.resume_variant_selection_mode, "
+                f"{selected_variant_exists} AS selected_variant_exists "
+                "FROM applications AS app ORDER BY app.job_id COLLATE BINARY"
+            ).fetchall()
+            selection_rows = tuple(
+                (
+                    row["job_id"],
+                    row["selected_resume_variant"],
+                    row["resume_variant_selection_mode"],
+                    bool(row["selected_variant_exists"]),
+                )
+                for row in raw_selection_rows
+            )
+            selections = tuple(
+                row for row in selection_rows if _selection_nonempty(row[1])
+            )
+        else:
+            selection_rows = ()
+            selections = ()
         lineage_supported = {
             "job_id",
             "variant_key",
@@ -446,6 +468,7 @@ def _inspect(database: Path) -> _DatabaseEvidence:
             counts=counts,
             schema=schema,
             row_counts=row_counts,
+            selection_rows=selection_rows,
             selection_digest=_rows_digest(selections),
             lineage_digest=_rows_digest(lineage),
             artifact_digest=artifact_digest,
@@ -480,17 +503,10 @@ def _compare(
         or migrated.row_counts.get(table) == count
         for table, count in baseline.row_counts.items()
     )
-    selection_equal = (
-        not baseline.selection_supported
-        or (
-            left.selected_count == right.selected_count
-            and baseline.selection_digest == migrated.selection_digest
-        )
-        or (
-            application_level_migration
-            and left.selected_count == 0
-            and right.selected_count == right.variant_count
-        )
+    selection_equal, invalid_auto_normalized = _compare_selection_rows(
+        baseline,
+        migrated,
+        application_level_migration=application_level_migration,
     )
     lineage_equal = (
         not baseline.lineage_supported
@@ -537,7 +553,60 @@ def _compare(
         "migrated_variant_count": right.variant_count,
         "baseline_query_outcome_count": left.query_outcome_count,
         "migrated_query_outcome_count": right.query_outcome_count,
+        "invalid_auto_selection_normalized_count": invalid_auto_normalized,
     }
+
+
+def _compare_selection_rows(
+    baseline: _DatabaseEvidence,
+    migrated: _DatabaseEvidence,
+    *,
+    application_level_migration: bool,
+) -> tuple[bool, int]:
+    if not baseline.selection_supported:
+        return True, 0
+    if baseline.selection_rows == migrated.selection_rows:
+        return True, 0
+    if (
+        application_level_migration
+        and baseline.counts.selected_count == 0
+        and migrated.counts.selected_count == migrated.counts.variant_count
+    ):
+        return True, 0
+    if not migrated.selection_supported:
+        return False, 0
+
+    source_rows = baseline.selection_rows
+    migrated_rows = migrated.selection_rows
+    if len(source_rows) != len(migrated_rows):
+        return False, 0
+
+    invalid_source_count = sum(_invalid_automatic_selection(row) for row in source_rows)
+    normalized_count = 0
+    for source_row, migrated_row in zip(source_rows, migrated_rows, strict=True):
+        if source_row[:3] == migrated_row[:3]:
+            continue
+        if (
+            source_row[0] != migrated_row[0]
+            or not _invalid_automatic_selection(source_row)
+            or migrated_row[2] != "auto"
+            or not _selection_empty(migrated_row[1])
+        ):
+            return False, normalized_count
+        normalized_count += 1
+    return normalized_count == invalid_source_count, normalized_count
+
+
+def _invalid_automatic_selection(row: tuple[Any, Any, Any, bool]) -> bool:
+    return row[2] == "auto" and _selection_nonempty(row[1]) and not row[3]
+
+
+def _selection_nonempty(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _selection_empty(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _evidence_equal(left: _DatabaseEvidence, right: _DatabaseEvidence) -> bool:
@@ -546,6 +615,7 @@ def _evidence_equal(left: _DatabaseEvidence, right: _DatabaseEvidence) -> bool:
             left.counts == right.counts,
             left.schema == right.schema,
             left.row_counts == right.row_counts,
+            left.selection_rows == right.selection_rows,
             left.selection_digest == right.selection_digest,
             left.lineage_digest == right.lineage_digest,
             left.artifact_digest == right.artifact_digest,
@@ -661,7 +731,7 @@ def _presence(
     )
 
 
-def _rows_digest(rows: Sequence[sqlite3.Row]) -> bytes:
+def _rows_digest(rows: Sequence[Sequence[Any]]) -> bytes:
     digest = hashlib.sha256()
     for row in rows:
         for value in row:

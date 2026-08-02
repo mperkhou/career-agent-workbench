@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
+import career_agent_workbench.ops_migration as ops_migration
 
 from career_agent_workbench.application_state import (
     ApplicationMetadata,
@@ -206,6 +209,7 @@ def test_disposable_initialization_preserves_counts_content_and_lineage(
     assert result.query_outcome_count_equal is True
     assert result.existing_table_row_counts_equal is True
     assert result.selection_equal is True
+    assert result.invalid_auto_selection_normalized_count == 0
     assert result.lineage_equal is True
     assert result.lineage_valid is True
     assert result.jod_presence_equal is True
@@ -219,6 +223,163 @@ def test_disposable_initialization_preserves_counts_content_and_lineage(
         public_repository=PUBLIC_ROOT,
     )
     assert not disposable.exists()
+
+
+def test_disposable_initialization_accepts_only_invalid_automatic_clear(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "invalid-auto-workspace"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    source = workspace / "state.sqlite3"
+    store = ApplicationStateStore(
+        WorkspacePaths(root=workspace, database=source, output_dir=output)
+    )
+    store.initialize()
+    store.upsert_application(
+        ApplicationMetadata(
+            job_id="fictional-invalid-auto",
+            company="Example Cooperative",
+            job_title="Reliability Engineer",
+            job_url="https://jobs.example.com/fictional-invalid-auto",
+            source="example_public",
+        )
+    )
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            "UPDATE applications SET selected_resume_variant = 'v2', "
+            "resume_variant_selection_mode = 'auto'"
+        )
+
+    disposable = tmp_path / "invalid-auto-disposable"
+    result = validate_disposable_database_copy(
+        source,
+        disposable,
+        database_relative=Path("state/copied.sqlite3"),
+        public_repository=PUBLIC_ROOT,
+    )
+
+    assert result.passed is True
+    assert result.selection_equal is True
+    assert result.invalid_auto_selection_normalized_count == 1
+    assert result.baseline_application_count == result.migrated_application_count == 1
+    assert "fictional-invalid-auto" not in repr(result)
+    assert cleanup_disposable_workspace(
+        disposable,
+        public_repository=PUBLIC_ROOT,
+    )
+
+
+def _selection_evidence(
+    rows: tuple[tuple[object, object, object, bool], ...],
+) -> ops_migration._DatabaseEvidence:
+    counts = ops_migration.DatabaseCounts(
+        table_count=2,
+        total_row_count=len(rows),
+        application_count=len(rows),
+        variant_count=0,
+        query_outcome_count=0,
+        selected_count=sum(ops_migration._selection_nonempty(row[1]) for row in rows),
+        lineage_valid=True,
+        jod_source_count=0,
+        jod_prompt_count=0,
+        aro_count=0,
+        clo_count=0,
+        artifact_count=0,
+    )
+    return ops_migration._DatabaseEvidence(
+        counts=counts,
+        schema={},
+        row_counts={},
+        selection_rows=rows,
+        selection_digest=b"synthetic-selection",
+        lineage_digest=b"synthetic-lineage",
+        artifact_digest=b"synthetic-artifact",
+        selection_supported=True,
+        lineage_supported=True,
+    )
+
+
+def test_selection_comparison_accepts_exact_equality() -> None:
+    rows = (("fictional-a", "v1", "auto", True),)
+    evidence = _selection_evidence(rows)
+
+    assert ops_migration._compare_selection_rows(
+        evidence,
+        evidence,
+        application_level_migration=False,
+    ) == (True, 0)
+
+
+@pytest.mark.parametrize(
+    ("source_rows", "migrated_rows"),
+    (
+        (
+            (("fictional-a", "missing", "manual", False),),
+            (("fictional-a", "", "manual", False),),
+        ),
+        (
+            (("fictional-a", "v1", "auto", True),),
+            (("fictional-a", "", "auto", False),),
+        ),
+        (
+            (("fictional-a", "missing", "auto", False),),
+            (("fictional-a", "", "manual", False),),
+        ),
+        (
+            (
+                ("fictional-a", "missing", "auto", False),
+                ("fictional-b", "missing", "auto", False),
+            ),
+            (
+                ("fictional-a", "", "auto", False),
+                ("fictional-b", "missing", "auto", False),
+            ),
+        ),
+        (
+            (("fictional-a", "missing", "auto", False),),
+            (("fictional-a", "v1", "auto", True),),
+        ),
+        (
+            (("fictional-a", "missing", "auto", False),),
+            (("fictional-b", "", "auto", False),),
+        ),
+    ),
+)
+def test_selection_comparison_rejects_unbounded_changes(
+    source_rows: tuple[tuple[object, object, object, bool], ...],
+    migrated_rows: tuple[tuple[object, object, object, bool], ...],
+) -> None:
+    accepted, _count = ops_migration._compare_selection_rows(
+        _selection_evidence(source_rows),
+        _selection_evidence(migrated_rows),
+        application_level_migration=False,
+    )
+
+    assert accepted is False
+
+
+def test_comparison_still_rejects_lineage_and_artifact_changes(
+    tmp_path: Path,
+) -> None:
+    _store, source = _synthetic_database(tmp_path)
+    baseline = ops_migration._inspect(source)
+
+    lineage = ops_migration._compare(
+        baseline,
+        replace(baseline, lineage_digest=b"changed-lineage"),
+        source_unchanged=True,
+    )
+    artifact = ops_migration._compare(
+        baseline,
+        replace(baseline, artifact_digest=b"changed-artifact"),
+        source_unchanged=True,
+    )
+
+    assert lineage["passed"] is False
+    assert lineage["lineage_equal"] is False
+    assert artifact["passed"] is False
+    assert artifact["artifact_digest_equal"] is False
 
 
 def test_failed_disposable_validation_cleans_copy_and_keeps_source(

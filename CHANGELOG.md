@@ -23,6 +23,9 @@
 - Extended the existing manual patch workflow to prune rendered skills while
   preserving evidence-backed DevOps, scalability, CI/CD, cloud, and GitHub
   Actions terms without authorizing inflated surrounding claims.
+- Accepted only the deterministic clearing of non-resolving automatic resume
+  selections during copied-state initialization, while preserving every valid
+  automatic selection, explicit manual selection, variant, and artifact.
 
 ### Safety and governance
 

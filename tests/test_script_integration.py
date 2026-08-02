@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 import yaml
@@ -529,3 +529,123 @@ def test_private_output_resolution_rejects_symlink_components(tmp_path: Path) ->
             resume={"name": "Fictional Candidate"},
         )
     assert str(outside) not in str(caught.value)
+
+
+def test_sync_drafts_uses_supported_page_and_preserves_selected_variant(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_sync_drafts_to_aro.py")
+    paths = WorkspacePaths(
+        database=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "artifacts",
+    )
+    variant = SimpleNamespace(
+        variant_key="manual",
+        variant_label="Synthetic manual review",
+        parent_variant_key="v2",
+        application_resume={"basics": {"name": "Fictional Candidate"}},
+        evidence_packet=MappingProxyType(
+            {"status": "synthetic", "ids": ("evidence-1",)}
+        ),
+        external_critique=None,
+        critique=MappingProxyType({"status": "bounded"}),
+        validation=MappingProxyType({"accepted": ("synthetic evidence",)}),
+        model_metadata=MappingProxyType(
+            {"review_state": "accepted", "nested": MappingProxyType({"ok": True})}
+        ),
+    )
+    record = SimpleNamespace(
+        job_id="fictional-sync",
+        selected_resume_variant="manual",
+        prompt_job_description="Responsibilities: Build synthetic systems.",
+        job_description=None,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeStore:
+        def __init__(self, configured_paths):
+            assert configured_paths == paths
+
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            captured["page_limit"] = limit
+            return (record,)
+
+        def get_workflow_snapshot(self, job_id):
+            assert job_id == record.job_id
+            return SimpleNamespace(
+                application=record,
+                variants=(variant,),
+                revision="synthetic-revision",
+            )
+
+        def upsert_resume_variant_if_revision(
+            self,
+            job_id,
+            write,
+            *,
+            expected_revision,
+        ):
+            captured["write"] = (job_id, write, expected_revision)
+
+    score = SimpleNamespace(
+        overall_score=81,
+        parsing_score=82,
+        keyword_match_score=79,
+        semantic_match_score=80,
+        formatting_risk="low",
+        missing_high_value_terms=("bounded term",),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_command_config",
+        lambda *_a, **_k: RuntimeConfig(
+            paths=paths,
+            settings=Settings(),
+            env_file=None,
+        ),
+    )
+    monkeypatch.setattr(module, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(
+        module,
+        "render_resume_html_from_mapping",
+        lambda **_k: "<html>synthetic resume</html>",
+    )
+    monkeypatch.setattr(
+        module,
+        "render_resume_pdf_from_html",
+        lambda _html: b"synthetic-pdf",
+    )
+    monkeypatch.setattr(
+        module,
+        "calculate_ats_diagnostics",
+        lambda **_k: SimpleNamespace(score=score),
+    )
+    monkeypatch.setattr(
+        module,
+        "asdict",
+        lambda _value: {"synthetic_components": ("bounded",)},
+    )
+
+    assert module.main(["--job-id", record.job_id]) == 0
+    assert json.loads(capsys.readouterr().out) == {"processed": 1}
+    assert captured["page_limit"] == module.MAX_QUERY_RESULTS
+    job_id, write, revision = captured["write"]
+    assert job_id == record.job_id
+    assert revision == "synthetic-revision"
+    assert write.variant_key == variant.variant_key
+    assert write.parent_variant_key == variant.parent_variant_key
+    assert write.evidence_packet == {
+        "status": "synthetic",
+        "ids": ["evidence-1"],
+    }
+    assert write.critique == {"status": "bounded"}
+    assert write.validation == {"accepted": ["synthetic evidence"]}
+    assert write.model_metadata == {
+        "review_state": "awaiting_user_review",
+        "nested": {"ok": True},
+        "render_sync": "packaged_template",
+    }
+    assert write.ats_diagnostics == {"synthetic_components": ["bounded"]}

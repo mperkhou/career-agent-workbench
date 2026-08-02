@@ -14,18 +14,53 @@
       input, select, textarea, button { border: 1px solid #c6cedb; border-radius: 7px; padding: .65rem; }
       textarea { min-height: 8rem; resize: vertical; }
       button { background: #174ea6; border: 0; color: white; font-weight: 700; }
+      button.secondary { background: #5f6b7a; }
       a { color: #174ea6; }
       .muted { color: #687386; }
+      fieldset { border: 1px solid #dce2ec; border-radius: 8px; display: grid; gap: .5rem; }
+      .progress-panel { display: grid; gap: .6rem; }
+      .progress-panel[hidden], .progress-details[hidden] { display: none; }
+      progress { width: 100%; }
+      .message-list, .failure-list { margin: 0; padding-left: 1.25rem; }
     </style>
   </head>
   <body data-refresh-url="{{ view.index_url }}">
+    {% macro workflow_options(prefix) -%}
+      <fieldset data-workflow-composition>
+        <legend>Optional downstream workflow</legend>
+        <label><input id="{{ prefix }}-v1" type="checkbox" name="run_v1" value="1"> Generate v1</label>
+        <label><input id="{{ prefix }}-v2" type="checkbox" name="run_v2" value="1"> Refine v2 (requires v1)</label>
+        <label><input id="{{ prefix }}-manual" type="checkbox" name="run_manual" value="1"> Run manual pass (requires v1 and v2)</label>
+        <label>Manual profile
+          <select name="manual_pass_profile">
+            <option value="economy">Economy</option>
+            <option value="regular" selected>Regular</option>
+            <option value="premium">Premium</option>
+          </select>
+        </label>
+        <label><input id="{{ prefix }}-highlight" type="checkbox" name="run_highlight" value="1"> Highlight final selected stage (requires v1)</label>
+      </fieldset>
+    {%- endmacro %}
     <main>
       <p><a href="{{ view.index_url }}">← Return to preserved tracker view</a></p>
       <section>
         <h1>Add / Seed applications</h1>
         <p class="muted">Use public guest access only. Submitted URL lists are normalized, deduplicated, and bounded.</p>
         <p id="web-feedback" class="muted" role="status">Ready.</p>
-        <p id="action-progress" class="muted"></p>
+        <div id="action-progress-panel" class="progress-panel" aria-live="polite" {% if not actions %}hidden{% endif %}>
+          <div class="row">
+            <strong id="action-title">{{ actions[0].target if actions else "Action status" }}</strong>
+            <button id="action-collapse" class="secondary" type="button" aria-expanded="true">Collapse</button>
+            <button id="action-retry" class="secondary" type="button" hidden>Retry failed work</button>
+            <button id="action-dismiss" class="secondary" type="button" hidden>Dismiss</button>
+          </div>
+          <div id="action-progress-details" class="progress-details">
+            <p id="action-progress" class="muted"></p>
+            <progress id="action-progress-bar" max="1" value="0">0%</progress>
+            <ul id="action-failures" class="failure-list"></ul>
+            <ul id="action-messages" class="message-list"></ul>
+          </div>
+        </div>
       </section>
 
       <section>
@@ -46,6 +81,7 @@
             <label>Maximum queries <input type="number" name="max_queries" min="1" max="100" value="6" required></label>
             <label>Maximum jobs <input type="number" name="max_jobs" min="1" max="50" value="10" required></label>
           </div>
+          {{ workflow_options("seed") }}
           <button type="submit">Start seed action</button>
         </form>
       </section>
@@ -55,6 +91,7 @@
         <form method="post" action="/applications/add/linkedin" data-ingestion-form="linkedin">
           {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
           <textarea name="linkedin_urls" maxlength="82000" placeholder="One or more public LinkedIn job URLs" required></textarea>
+          {{ workflow_options("linkedin") }}
           <button type="submit">Add LinkedIn jobs</button>
         </form>
       </section>
@@ -64,6 +101,7 @@
         <form method="post" action="/applications/add/other" data-ingestion-form="generic">
           {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
           <textarea name="other_urls" maxlength="82000" placeholder="One or more public job URLs" required></textarea>
+          {{ workflow_options("other") }}
           <button type="submit">Add public jobs</button>
         </form>
       </section>

@@ -11,6 +11,7 @@ from career_agent_workbench.application_state import (
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
 from career_agent_workbench.generic_job_scraper import generic_job_id
 from career_agent_workbench.models import JobDetails
+from career_agent_workbench.webapp_actions import CommandExecution
 
 
 class _InlineThread:
@@ -308,6 +309,11 @@ def test_seed_runs_in_app_scoped_background_action_with_bounded_make_inputs(
     assert 'data-background-form="seed"' in page_text
     assert 'data-ingestion-form="linkedin"' in page_text
     assert 'data-ingestion-form="generic"' in page_text
+    assert page_text.count('name="run_v1"') == 3
+    assert page_text.count('name="run_v2"') == 3
+    assert page_text.count('name="run_manual"') == 3
+    assert page_text.count('name="run_highlight"') == 3
+    assert 'id="action-progress-bar"' in page_text
 
     response = client.post(
         "/applications/add/seed",
@@ -365,6 +371,182 @@ def test_seed_runs_in_app_scoped_background_action_with_bounded_make_inputs(
         }
         assert client.post("/applications/add/seed", data=payload).status_code == 400
     assert len(commands) == 1
+
+
+def test_invalid_ingestion_dependencies_fail_before_fetch_or_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fetch_calls: list[str] = []
+    command_calls: list[tuple[str, ...]] = []
+    thread_count = 0
+
+    class CountingThread(_InlineThread):
+        def __init__(self, **kwargs) -> None:
+            nonlocal thread_count
+            thread_count += 1
+            super().__init__(**kwargs)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "Makefile").write_text("help:\n\t@true\n", encoding="utf-8")
+    monkeypatch.setattr(webapp.threading, "Thread", CountingThread)
+    app = webapp.create_app(
+        _runtime(_paths(tmp_path)),
+        project_root=project,
+        command_executor=lambda argv: command_calls.append(tuple(argv)) or 0,
+        linkedin_details_fetcher=lambda url: (
+            fetch_calls.append(url) or _details("123", url=url)
+        ),
+        generic_html_fetcher=lambda url: fetch_calls.append(url) or _generic_html(),
+    )
+    client = app.test_client()
+    for route, payload in (
+        (
+            "/applications/add/linkedin",
+            {
+                "linkedin_urls": "https://www.linkedin.com/jobs/view/123",
+                "run_v2": "1",
+            },
+        ),
+        (
+            "/applications/add/other",
+            {
+                "other_urls": "https://jobs.example.com/opening",
+                "run_v1": "1",
+                "run_manual": "1",
+            },
+        ),
+        (
+            "/applications/add/seed",
+            {
+                "location": "Fictional City",
+                "date_posted": "past_week",
+                "limit_per_query": "7",
+                "max_queries": "4",
+                "max_jobs": "3",
+                "run_highlight": "1",
+            },
+        ),
+    ):
+        response = client.post(route, data={**_view_form(), **payload})
+        assert response.status_code == 400
+        assert response.get_json()["status"] == "rejected"
+    assert fetch_calls == []
+    assert command_calls == []
+    assert thread_count == 0
+
+
+def test_url_composition_runs_only_for_successfully_ingested_jobs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fetcher(url: str) -> str:
+        if url.endswith("failed"):
+            raise RuntimeError("synthetic private fetch detail")
+        return _generic_html()
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "Makefile").write_text("help:\n\t@true\n", encoding="utf-8")
+    monkeypatch.setattr(webapp.threading, "Thread", _InlineThread)
+    app = webapp.create_app(
+        _runtime(_paths(tmp_path)),
+        project_root=project,
+        command_executor=lambda argv: commands.append(tuple(argv)) or 0,
+        generic_html_fetcher=fetcher,
+    )
+    response = app.test_client().post(
+        "/applications/add/other",
+        data={
+            **_view_form(),
+            "other_urls": (
+                "https://jobs.example.com/survivor\nhttps://jobs.example.com/failed"
+            ),
+            "run_v1": "1",
+            "run_v2": "1",
+        },
+    )
+    assert response.status_code == 202
+    assert response.get_json()["accepted"] == 1
+    assert response.get_json()["failed"] == 1
+    assert [command[3] for command in commands] == [
+        "regenerate-draft-resumes",
+        "refine-draft-resumes",
+    ]
+    survivor = generic_job_id("https://jobs.example.com/survivor")
+    assert all(f"JOB_IDS={survivor}" in command for command in commands)
+    assert not any("failed" in item for command in commands for item in command)
+
+
+def test_seed_composition_uses_only_newly_seeded_jobs_and_selected_stages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "Makefile").write_text("help:\n\t@true\n", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+    app_holder: dict[str, object] = {}
+
+    def executor(argv):
+        command = tuple(argv)
+        commands.append(command)
+        if command[3] == "seed-jobs":
+            store = app_holder["app"].extensions["career_agent_workbench"]["store"]
+            store.upsert_application(
+                ApplicationMetadata(
+                    job_id="new-seeded-job",
+                    company="Example Seed Systems",
+                    job_title="Fictional Seed Engineer",
+                    job_url="https://example.com/jobs/new-seeded-job",
+                    source="synthetic",
+                )
+            )
+            return CommandExecution(0, '{"jobs_seeded": 1}')
+        return 0
+
+    monkeypatch.setattr(webapp.threading, "Thread", _InlineThread)
+    app = webapp.create_app(
+        _runtime(paths),
+        project_root=project,
+        command_executor=executor,
+    )
+    app_holder["app"] = app
+    store = app.extensions["career_agent_workbench"]["store"]
+    store.upsert_application(
+        ApplicationMetadata(
+            job_id="existing-job",
+            company="Example Existing Systems",
+            job_title="Fictional Existing Engineer",
+            job_url="https://example.com/jobs/existing-job",
+            source="synthetic",
+        )
+    )
+    response = app.test_client().post(
+        "/applications/add/seed",
+        data={
+            **_view_form(),
+            "location": "Fictional City",
+            "date_posted": "past_week",
+            "limit_per_query": "7",
+            "max_queries": "4",
+            "max_jobs": "3",
+            "run_v1": "1",
+            "run_highlight": "1",
+        },
+    )
+    assert response.status_code == 202
+    assert [command[3] for command in commands] == [
+        "seed-jobs",
+        "regenerate-draft-resumes",
+        "highlight-draft-resumes",
+    ]
+    assert all("JOB_IDS=new-seeded-job" in command for command in commands[1:])
+    assert not any("JOB_IDS=existing-job" in command for command in commands)
 
 
 def test_url_inputs_are_bounded_and_all_failures_remain_count_only(

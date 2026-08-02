@@ -16,12 +16,17 @@
       th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
       th { color: #566176; font-size: .8rem; }
       button { border: 0; border-radius: 8px; padding: .65rem .9rem; background: #174ea6; color: white; font-weight: 700; }
+      button.secondary { background: #5f6b7a; }
       button.danger { background: #a61b1b; }
       input, select, textarea { border: 1px solid #c6cedb; border-radius: 7px; padding: .5rem; }
       textarea { min-height: 3rem; resize: vertical; }
       .muted { color: #687386; }
       .status-list { display: grid; gap: .5rem; padding: 0; list-style: none; }
       .status-list li { padding: .7rem; border-radius: 8px; background: #f6f8fb; }
+      .progress-panel { display: grid; gap: .6rem; }
+      .progress-panel[hidden], .progress-details[hidden] { display: none; }
+      progress { width: 100%; }
+      .message-list, .failure-list { margin: 0; padding-left: 1.25rem; }
       .application-update { display: grid; gap: .35rem; min-width: 18rem; }
       .nowrap { white-space: nowrap; }
       @media (max-width: 900px) { table { display: block; overflow-x: auto; } }
@@ -178,8 +183,21 @@
       <section id="action-status">
         <h2>Action status</h2>
         <p id="web-feedback" class="muted" role="status">Ready.</p>
-        <p id="action-progress" class="muted"></p>
-        <ul class="status-list">
+        <div id="action-progress-panel" class="progress-panel" aria-live="polite" {% if not actions %}hidden{% endif %}>
+          <div class="actions">
+            <strong id="action-title">{{ actions[0].target if actions else "Action status" }}</strong>
+            <button id="action-collapse" class="secondary" type="button" aria-expanded="true">Collapse</button>
+            <button id="action-retry" class="secondary" type="button" hidden>Retry failed work</button>
+            <button id="action-dismiss" class="secondary" type="button" hidden>Dismiss</button>
+          </div>
+          <div id="action-progress-details" class="progress-details">
+            <p id="action-progress" class="muted"></p>
+            <progress id="action-progress-bar" max="1" value="0">0%</progress>
+            <ul id="action-failures" class="failure-list"></ul>
+            <ul id="action-messages" class="message-list"></ul>
+          </div>
+        </div>
+        <ul class="status-list" data-action-history>
           {% for action in actions %}
             <li><strong>{{ action.target }}</strong> — {{ action.status }} · {{ action.message }}</li>
           {% else %}

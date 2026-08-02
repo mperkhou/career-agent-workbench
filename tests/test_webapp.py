@@ -233,22 +233,27 @@ def test_background_argv_uses_exact_paths_and_ignores_later_cwd(
         },
     )
     assert response.status_code == 202
-    expected = (
+    expected_prefix = (
         "make",
         "-C",
         str(project_root.resolve()),
         "refine-draft-resumes",
-        "JOB_IDS=fictional-a fictional-b",
-        f"WORKSPACE={paths.root}",
-        f"DATABASE={paths.database}",
-        f"OUTPUT_DIR={paths.output_dir}",
-        f"PROFILE_DIR={paths.profile_dir}",
-        f"MASTER_RESUME={paths.master_resume}",
-        f"MASTER_RESUME_TEXT={paths.master_resume_text}",
-        f"BLACKLIST={paths.blacklist}",
-        f"TMP_DIR={paths.tmp_dir}",
     )
-    assert commands == [expected]
+    assert len(commands) == 2
+    assert all(command[:4] == expected_prefix for command in commands)
+    assert [command[4] for command in commands] == [
+        "JOB_IDS=fictional-a",
+        "JOB_IDS=fictional-b",
+    ]
+    for command in commands:
+        assert f"WORKSPACE={paths.root}" in command
+        assert f"DATABASE={paths.database}" in command
+        assert f"OUTPUT_DIR={paths.output_dir}" in command
+        assert f"PROFILE_DIR={paths.profile_dir}" in command
+        assert f"MASTER_RESUME={paths.master_resume}" in command
+        assert f"MASTER_RESUME_TEXT={paths.master_resume_text}" in command
+        assert f"BLACKLIST={paths.blacklist}" in command
+        assert f"TMP_DIR={paths.tmp_dir}" in command
 
     status_text = app.test_client().get("/actions/status").get_data(as_text=True)
     page_text = app.test_client().get("/").get_data(as_text=True)
@@ -316,7 +321,7 @@ def test_action_rejections_precede_executor_and_failures_are_generic(
     status = client.get("/actions/status").get_json()["actions"][0]
     assert status["status"] == "failed"
     assert status["return_code"] == 1
-    assert status["message"] == "Stage 1 of 1 failed."
+    assert status["message"] == "Action failed for every selected job."
     assert "synthetic-private-exception" not in repr(status)
 
     unavailable = webapp.create_app(

@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from flask import Flask, Response, jsonify, redirect, render_template, request
 
 from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
     ApplicationStateConflictError,
     ApplicationStateStore,
     workflow_revision_from_token,
@@ -33,14 +34,20 @@ from career_agent_workbench.webapp_actions import (
     ACTION_OPTIONS,
     ATS_ACTION,
     ActionRegistry,
+    CommandExecution,
     CommandExecutor,
     CommandStage,
     action_snapshots,
     build_action_stages,
+    build_ingestion_stages,
     build_seed_argv,
     create_action,
+    create_retry_action,
+    dismiss_action,
+    parse_workflow_composition,
     run_ats_action,
     run_command_action,
+    run_seed_action,
 )
 from career_agent_workbench.webapp_ingestion import (
     GenericHtmlFetcher,
@@ -118,13 +125,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _default_command_executor(argv: Sequence[str]) -> int:
+def _default_command_executor(argv: Sequence[str]) -> CommandExecution:
     completed = subprocess.run(
         list(argv),
         shell=False,
         check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
-    return completed.returncode
+    return CommandExecution(
+        return_code=completed.returncode,
+        output=completed.stdout,
+    )
 
 
 def _bound_project_root(project_root: Path | None) -> Path | None:
@@ -155,6 +168,8 @@ def _selected_job_ids(values: Sequence[str]) -> tuple[str, ...] | None:
             return None
         seen.add(job_id)
         selected.append(job_id)
+        if len(selected) > 50:
+            return None
     return tuple(selected)
 
 
@@ -193,6 +208,23 @@ def _seed_request() -> tuple[str, str, int, int, int]:
         _bounded_form_integer("limit_per_query", upper=100),
         _bounded_form_integer("max_queries", upper=100),
         _bounded_form_integer("max_jobs", upper=50),
+    )
+
+
+def _checkbox(name: str) -> bool:
+    value = request.form.get(name)
+    if value not in {None, "1"}:
+        raise ValueError
+    return value == "1"
+
+
+def _workflow_composition():
+    return parse_workflow_composition(
+        run_v1=_checkbox("run_v1"),
+        run_v2=_checkbox("run_v2"),
+        run_manual=_checkbox("run_manual"),
+        run_highlight=_checkbox("run_highlight"),
+        manual_profile=request.form.get("manual_pass_profile", "regular"),
     )
 
 
@@ -360,12 +392,17 @@ def create_app(
             view = _tracker_view()
         except TrackerViewError:
             return "Add view is invalid.", 400
-        return render_template("webapp/add.html", view=view)
+        return render_template(
+            "webapp/add.html",
+            view=view,
+            actions=action_snapshots(extension["actions"]),
+        )
 
     @app.post("/applications/add/seed")
     def seed_applications():
         try:
             view = _tracker_view(form=True)
+            composition = _workflow_composition()
             location, date_posted, limit_per_query, max_queries, max_jobs = (
                 _seed_request()
             )
@@ -374,6 +411,16 @@ def create_app(
                 return jsonify(
                     message="Seed action is unavailable.", status="rejected"
                 ), 503
+            existing_job_ids = tuple(
+                record.job_id for record in store.list_applications("all")
+            )
+            if (
+                composition.selected
+                and len(existing_job_ids) + max_jobs > MAX_QUERY_RESULTS
+            ):
+                return jsonify(
+                    message="Seed workflow is unavailable.", status="rejected"
+                ), 409
             argv = build_seed_argv(
                 project_root=bound_root,
                 location=location,
@@ -390,12 +437,17 @@ def create_app(
                 total_stages=1,
             )
             thread = threading.Thread(
-                target=run_command_action,
+                target=run_seed_action,
                 args=(
                     registry,
                     action.action_id,
                     extension["executor"],
-                    (CommandStage(label="Seed and match jobs", argv=argv),),
+                    CommandStage(label="Seed and match jobs", argv=argv),
+                    store,
+                    existing_job_ids,
+                    bound_root,
+                    paths,
+                    composition,
                 ),
                 daemon=True,
             )
@@ -410,7 +462,15 @@ def create_app(
 
     def _ingestion_response(*, linkedin: bool):
         try:
-            _tracker_view(form=True)
+            view = _tracker_view(form=True)
+            composition = _workflow_composition()
+            bound_root = extension["project_root"]
+            if composition.selected and (
+                bound_root is None or not (bound_root / "Makefile").is_file()
+            ):
+                return jsonify(
+                    message="URL workflow is unavailable.", status="rejected"
+                ), 503
             field = "linkedin_urls" if linkedin else "other_urls"
             batch = parse_job_url_batch(request.form.get(field), linkedin=linkedin)
             result = (
@@ -426,23 +486,53 @@ def create_app(
                     html_fetcher=generic_fetcher,
                 )
             )
-        except WebIngestionError:
+        except (WebIngestionError, ValueError):
             return jsonify(message="URL ingestion is invalid.", status="rejected"), 400
         except Exception:  # noqa: BLE001 - request failures stay content-free.
             return jsonify(message="URL ingestion failed.", status="rejected"), 400
         status = "accepted" if result.failed == 0 else "partial"
         response_code = 200 if result.accepted else 422
-        return (
-            jsonify(
-                accepted=result.accepted,
-                created=result.created,
-                failed=result.failed,
-                message="URL ingestion completed.",
-                refreshed=result.refreshed,
-                status=status if result.accepted else "rejected",
-            ),
-            response_code,
-        )
+        action = None
+        if result.accepted and composition.selected:
+            assert bound_root is not None
+            stages = build_ingestion_stages(
+                project_root=bound_root,
+                job_ids=result.job_ids,
+                paths=paths,
+                composition=composition,
+            )
+            registry = extension["actions"]
+            action = create_action(
+                registry,
+                label="Ingested job workflow",
+                total_stages=len(stages),
+                job_ids=result.job_ids,
+                stages=stages,
+            )
+            thread = threading.Thread(
+                target=run_command_action,
+                args=(
+                    registry,
+                    action.action_id,
+                    extension["executor"],
+                    stages,
+                ),
+                daemon=True,
+            )
+            thread.start()
+            response_code = 202
+        payload = {
+            "accepted": result.accepted,
+            "created": result.created,
+            "failed": result.failed,
+            "message": "URL ingestion completed.",
+            "refreshed": result.refreshed,
+            "status": status if result.accepted else "rejected",
+        }
+        if action is not None:
+            payload["action_id"] = action.action_id
+            payload["refresh_url"] = view.index_url
+        return jsonify(payload), response_code
 
     @app.post("/applications/add/linkedin")
     def add_linkedin_applications():
@@ -483,6 +573,7 @@ def create_app(
                 registry,
                 label="Recalculate selected ATS",
                 total_stages=1,
+                job_ids=job_ids,
             )
             thread = threading.Thread(
                 target=run_ats_action,
@@ -510,6 +601,8 @@ def create_app(
                 registry,
                 label=ACTION_OPTIONS[target],
                 total_stages=len(stages),
+                job_ids=job_ids,
+                stages=stages,
             )
             thread = threading.Thread(
                 target=run_command_action,
@@ -531,6 +624,41 @@ def create_app(
     @app.get("/actions/status")
     def action_status():
         return jsonify(actions=action_snapshots(extension["actions"]))
+
+    @app.post("/actions/<action_id>/retry")
+    def retry_action(action_id: str):
+        repeat_value = request.form.get("repeat_completed")
+        if repeat_value not in {None, "1"}:
+            return jsonify(message="Retry request is invalid.", status="rejected"), 400
+        registry = extension["actions"]
+        try:
+            action = create_retry_action(
+                registry,
+                action_id,
+                repeat_completed=repeat_value == "1",
+            )
+        except Exception:  # noqa: BLE001 - retry failures stay content-free.
+            return jsonify(message="Retry request is invalid.", status="rejected"), 400
+        thread = threading.Thread(
+            target=run_command_action,
+            args=(
+                registry,
+                action.action_id,
+                extension["executor"],
+                action.stages,
+            ),
+            daemon=True,
+        )
+        thread.start()
+        return jsonify(action_id=action.action_id, status="accepted"), 202
+
+    @app.post("/actions/<action_id>/dismiss")
+    def dismiss_action_status(action_id: str):
+        if not dismiss_action(extension["actions"], action_id):
+            return jsonify(
+                message="Dismiss request is invalid.", status="rejected"
+            ), 400
+        return jsonify(status="dismissed")
 
     def _selected_artifact(job_id: str, kind: str, *, attachment: bool):
         try:

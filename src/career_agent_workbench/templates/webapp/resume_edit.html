@@ -21,6 +21,10 @@
       <a href="/resumes/{{ application.job_id }}">PDF preview</a> ·
       <a href="/resumes/{{ application.job_id }}/download">Download PDF</a>
     </p>
+    <form method="post" action="/resumes/{{ application.job_id }}/copy-to-downloads">
+      {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <button type="submit">Copy PDF to configured downloads</button>
+    </form>
     <form method="post" action="/resumes/{{ application.job_id }}/edit">
       {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
       <input type="hidden" name="revision" value="{{ revision }}">

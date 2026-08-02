@@ -104,24 +104,31 @@ def cover_letter_artifact(
 def variant_review(snapshot: ApplicationWorkflowSnapshot) -> tuple[dict[str, Any], ...]:
     """Build bounded structured and YAML comparisons in canonical order."""
 
+    variants_by_key = {variant.variant_key: variant for variant in snapshot.variants}
+    if len(variants_by_key) != len(snapshot.variants):
+        raise WebArtifactError("Variant comparison is unavailable.")
     result: list[dict[str, Any]] = []
-    previous: ResumeVariantRecord | None = None
     for variant in snapshot.variants:
         changed_fields: tuple[str, ...] = ()
         unified_diff: tuple[str, ...] = ()
-        if previous is not None:
-            previous_mapping = _materialize(previous.application_resume)
+        parent: ResumeVariantRecord | None = None
+        if variant.parent_variant_key is not None:
+            parent = variants_by_key.get(variant.parent_variant_key)
+            if parent is None:
+                raise WebArtifactError("Variant comparison is unavailable.")
+        if parent is not None:
+            parent_mapping = _materialize(parent.application_resume)
             current_mapping = _materialize(variant.application_resume)
             changed_fields = tuple(
                 sorted(
                     key
-                    for key in {*previous_mapping, *current_mapping}
-                    if previous_mapping.get(key) != current_mapping.get(key)
+                    for key in {*parent_mapping, *current_mapping}
+                    if parent_mapping.get(key) != current_mapping.get(key)
                 )[:_MAX_CHANGED_FIELDS]
             )
             unified_diff = _yaml_diff(
-                previous.variant_key,
-                previous_mapping,
+                parent.variant_key,
+                parent_mapping,
                 variant.variant_key,
                 current_mapping,
             )
@@ -133,7 +140,6 @@ def variant_review(snapshot: ApplicationWorkflowSnapshot) -> tuple[dict[str, Any
                 "unified_diff": unified_diff,
             }
         )
-        previous = variant
     return tuple(result)
 
 

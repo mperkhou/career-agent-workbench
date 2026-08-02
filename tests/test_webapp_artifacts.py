@@ -9,6 +9,7 @@ from career_agent_workbench.application_state import (
     ResumeVariantWrite,
 )
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
+from career_agent_workbench.webapp_artifacts import variant_review
 
 
 def _app(tmp_path: Path):
@@ -98,6 +99,43 @@ def test_selected_and_exact_variant_artifact_routes(tmp_path: Path) -> None:
     assert client.get("/resume-html/missing-job").status_code == 404
 
 
+def test_variant_review_uses_the_declared_parent(tmp_path: Path) -> None:
+    app, store, _paths = _app(tmp_path)
+    store.upsert_resume_variant(
+        "fictional-job",
+        ResumeVariantWrite(
+            variant_key="manual",
+            variant_label="Manual pass",
+            source="synthetic",
+            parent_variant_key="v1",
+            application_resume_yaml=(
+                "name: Fictional One\nsummary: first\nmanual_only: true\n"
+            ),
+            resume_html="<p>fictional-manual</p>",
+            resume_pdf=b"%PDF-fictional-manual",
+            ats=AtsFields(score=86, missing_terms=""),
+        ),
+    )
+
+    comparisons = variant_review(store.get_workflow_snapshot("fictional-job"))
+    manual = next(
+        item for item in comparisons if item["variant"].variant_key == "manual"
+    )
+    assert manual["parent"] == "v1"
+    assert manual["changed_fields"] == ("manual_only",)
+    assert manual["unified_diff"][:2] == ("--- v1", "+++ manual")
+    assert any("manual_only" in line for line in manual["unified_diff"])
+    assert not any("Fictional Two" in line for line in manual["unified_diff"])
+
+    page = app.test_client().get("/resumes/fictional-job/variants")
+    assert page.status_code == 200
+    manual_section = page.get_data(as_text=True).split(
+        'data-variant-key="manual"', maxsplit=1
+    )[1]
+    assert "--- v1" in manual_section
+    assert "+++ manual" in manual_section
+
+
 def test_selection_reset_and_tracker_workbench_links(tmp_path: Path) -> None:
     app, store, _paths = _app(tmp_path)
     client = app.test_client()
@@ -125,6 +163,33 @@ def test_selection_reset_and_tracker_workbench_links(tmp_path: Path) -> None:
         "/applications/fictional-job/cover-letter",
     ):
         assert route in page
+
+
+def test_resume_editor_exposes_copy_form_with_preserved_view_state(
+    tmp_path: Path,
+) -> None:
+    app, _store, _paths = _app(tmp_path)
+    response = app.test_client().get(
+        "/resumes/fictional-job/edit"
+        "?q=example&status=all&scope=all&sort=company&direction=desc"
+    )
+
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    action = 'action="/resumes/fictional-job/copy-to-downloads"'
+    copy_form = page.split(action, maxsplit=1)[1].split("</form>", maxsplit=1)[0]
+    assert (
+        'method="post"'
+        in page.split(action, maxsplit=1)[0].rsplit("<form", maxsplit=1)[1]
+    )
+    for name, value in (
+        ("view_q", "example"),
+        ("view_status", "all"),
+        ("view_scope", "all"),
+        ("view_sort", "company"),
+        ("view_direction", "desc"),
+    ):
+        assert f'name="{name}" value="{value}"' in copy_form
 
 
 def test_explicit_copy_is_atomic_bounded_and_does_not_clean_up(tmp_path: Path) -> None:

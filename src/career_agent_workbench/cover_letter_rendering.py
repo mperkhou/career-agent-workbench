@@ -171,15 +171,24 @@ def _render_pdf(sanitized_html: str, plain_text: str) -> bytes:
     style.leading = 16
     story: list[Any] = []
     soup = BeautifulSoup(sanitized_html, "html.parser")
-    blocks = tuple(
-        tag for tag in soup.find_all(_BLOCK_TAGS) if not tag.find_parent(_BLOCK_TAGS)
-    )
-    if blocks:
-        for block in blocks:
-            markup = _reportlab_markup(block)
+    inline_nodes: list[Any] = []
+
+    def flush_inline_nodes() -> None:
+        markup = "".join(_reportlab_markup(node) for node in inline_nodes).strip()
+        inline_nodes.clear()
+        if markup:
+            story.extend((Paragraph(markup, style), Spacer(1, 9)))
+
+    for node in soup.children:
+        if isinstance(node, Tag) and node.name.casefold() in _BLOCK_TAGS:
+            flush_inline_nodes()
+            markup = _reportlab_markup(node).strip()
             if markup:
                 story.extend((Paragraph(markup, style), Spacer(1, 9)))
-    else:
+        else:
+            inline_nodes.append(node)
+    flush_inline_nodes()
+    if not story:
         for line in plain_text.splitlines() or ("",):
             story.extend((Paragraph(html.escape(line), style), Spacer(1, 9)))
 
@@ -194,16 +203,16 @@ def _render_pdf(sanitized_html: str, plain_text: str) -> bytes:
     return pdf
 
 
-def _reportlab_markup(block: Tag) -> str:
+def _reportlab_markup(node: Any) -> str:
     parts: list[str] = []
 
-    def visit(node: Any) -> None:
-        if isinstance(node, NavigableString):
-            parts.append(html.escape(str(node)))
+    def visit(current: Any) -> None:
+        if isinstance(current, NavigableString):
+            parts.append(html.escape(str(current)))
             return
-        if not isinstance(node, Tag):
+        if not isinstance(current, Tag):
             return
-        name = node.name.casefold()
+        name = current.name.casefold()
         if name == "br":
             parts.append("<br/>")
             return
@@ -211,16 +220,19 @@ def _reportlab_markup(block: Tag) -> str:
         if rendered_name in {"b", "i"}:
             parts.append(f"<{rendered_name}>")
         elif rendered_name == "a":
-            href = html.escape(str(node.get("href") or ""), quote=True)
+            href = html.escape(str(current.get("href") or ""), quote=True)
             parts.append(f'<a href="{href}">')
-        for child in node.children:
+        for child in current.children:
             visit(child)
         if rendered_name in {"b", "i", "a"}:
             parts.append(f"</{rendered_name}>")
 
-    for child in block.children:
-        visit(child)
-    return "".join(parts).strip()
+    if isinstance(node, Tag) and node.name.casefold() in _BLOCK_TAGS:
+        for child in node.children:
+            visit(child)
+    else:
+        visit(node)
+    return "".join(parts)
 
 
 __all__ = [

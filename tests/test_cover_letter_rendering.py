@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 import pytest
+from pypdf import PdfReader
 
 from career_agent_workbench.cover_letter_rendering import (
     CoverLetterRenderingError,
@@ -59,6 +62,35 @@ def test_plain_text_and_pdf_rendering_are_normalized_and_deterministic() -> None
         "Hello Example\nSecond\nLine"
     )
     assert rendered.pdf.startswith(b"%PDF-")
+    assert rendered.pdf == repeated.pdf
+
+
+def test_mixed_top_level_content_is_rendered_in_source_order() -> None:
+    source = (
+        "Dear <strong>Example Team</strong>,"
+        "<p>Thank you for the fictional opportunity.</p>"
+        "<em>Sincerely</em><br>Example Operator"
+    )
+    rendered = render_cover_letter(source)
+    repeated = render_cover_letter(source)
+
+    assert rendered.value["body_text"] == (
+        "Dear Example Team,\n"
+        "Thank you for the fictional opportunity.\n"
+        "Sincerely\n"
+        "Example Operator"
+    )
+    extracted = "\n".join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(rendered.pdf)).pages
+    )
+    expected = (
+        "Dear Example Team,",
+        "Thank you for the fictional opportunity.",
+        "Sincerely",
+        "Example Operator",
+    )
+    positions = [extracted.index(text) for text in expected]
+    assert positions == sorted(positions)
     assert rendered.pdf == repeated.pdf
 
 

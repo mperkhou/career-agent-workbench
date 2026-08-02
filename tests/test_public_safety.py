@@ -140,10 +140,28 @@ def _wheel(path: Path, *, prohibited: bool = False) -> None:
     members = {
         "career_agent_workbench/__init__.py": '__version__ = "1.0.0"\n',
         "career_agent_workbench/__main__.py": "def main(): return 0\n",
+        "career_agent_workbench/cover_letter_rendering.py": "",
+        "career_agent_workbench/static/webapp/app.js": "void 0;\n",
         "career_agent_workbench/templates/resume/master_resume.html.j2": (
             "{{ data.header_top.line_1_name_header_text }}"
         ),
+        "career_agent_workbench/templates/webapp/add.html": "<main>Add</main>",
+        "career_agent_workbench/templates/webapp/cover_letter_edit.html": (
+            "<main>Cover letter</main>"
+        ),
         "career_agent_workbench/templates/webapp/index.html": "<main>Demo</main>",
+        "career_agent_workbench/templates/webapp/jod.html": "<main>JOD</main>",
+        "career_agent_workbench/templates/webapp/resume_edit.html": (
+            "<main>Resume</main>"
+        ),
+        "career_agent_workbench/templates/webapp/variant_review.html": (
+            "<main>Variants</main>"
+        ),
+        "career_agent_workbench/webapp_actions.py": "",
+        "career_agent_workbench/webapp_artifacts.py": "",
+        "career_agent_workbench/webapp_editors.py": "",
+        "career_agent_workbench/webapp_ingestion.py": "",
+        "career_agent_workbench/webapp_tracker.py": "",
         "career_agent_workbench-1.0.0.dist-info/METADATA": (
             "Name: career-agent-workbench\nVersion: 1.0.0\n"
         ),

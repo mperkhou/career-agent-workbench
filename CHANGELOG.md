@@ -35,6 +35,9 @@
 - Restored selected and exact-variant resume views/downloads, comparison and
   selection controls, guarded configured copies, JOD and CAS-governed resume
   editors, and sanitized cover-letter editing with deterministic PDF output.
+- Added the public `.venv` and explicit Chromium setup, PID-owned local website
+  lifecycle with opt-in browser opening, exact-five rewritten public skills,
+  offline MCP stdio proof, and complete restored package membership.
 
 ### Safety and governance
 
@@ -43,6 +46,9 @@
   public repository.
 - Keeps ops migration results limited to counts and booleans while rejecting
   public-repository destinations, path escapes, symlinks, and existing roots.
+- Requires the complete synthetic suite, wheel/sdist scan and isolated install,
+  real offline Chromium/browser rendering, and disposable-first private cutover
+  before PR readiness.
 
 ## [1.0.0] - 2026-08-01
 

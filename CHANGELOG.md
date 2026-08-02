@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.1.0] - In progress
+
+### Added
+
+- Added two-phase bootstrap/private dotenv loading for an external ops
+  workspace, with deterministic precedence, exact private-file permissions,
+  path containment, immutable loads, and content-hidden failures.
+- Restored workflow-specific model routing for JOD, core-skill, second-pass,
+  manual-pass, and highlighting commands while preserving the general provider
+  default and exact compatibility-variable precedence.
+- Restored conditional first-draft replacement, backup-first JOD cleanup with
+  optional ATS refresh, persisted bounded query outcomes, scoped highlighting,
+  private templates, and explicit rendered YAML/HTML/PDF exports.
+- Added prompt-only pass-one output without raw model-response persistence and
+  retained the current CLI, Make, state, selection, lineage, and CAS boundaries.
+- Added guarded, explicit-path ops workspace materialization, no-follow member
+  copying, online SQLite backup, disposable-only initialization, sanitized
+  invariant comparison, and marker-protected disposable cleanup.
+- Fixed the JOD audit launcher to honor the state layer's exported result bound
+  across direct CLI and Make execution.
+- Extended the existing manual patch workflow to prune rendered skills while
+  preserving evidence-backed DevOps, scalability, CI/CD, cloud, and GitHub
+  Actions terms without authorizing inflated surrounding claims.
+- Accepted only the deterministic clearing of non-resolving automatic resume
+  selections during copied-state initialization, while preserving every valid
+  automatic selection, explicit manual selection, variant, and artifact.
+- Aligned migration artifact evidence with canonical resume variants,
+  no-variant application fallbacks, backups, and cover letters so derived
+  application projections may be safely resynchronized from unchanged state.
+- Restored the local tracker view and lifecycle controls, bounded Add/Seed and
+  public URL ingestion, sequential allowlisted resume actions with app-scoped
+  progress, and explicit selected-resume ATS recalculation.
+- Restored selected and exact-variant resume views/downloads, comparison and
+  selection controls, guarded configured copies, JOD and CAS-governed resume
+  editors, and sanitized cover-letter editing with deterministic PDF output.
+- Added the public `.venv` and explicit Chromium setup, PID-owned local website
+  lifecycle with opt-in browser opening, exact-five rewritten public skills,
+  offline MCP stdio proof, and complete restored package membership.
+
+### Safety and governance
+
+- Keeps the public bootstrap dotenv limited to non-secret workspace discovery;
+  private runtime values are loaded only from a user-only file outside the
+  public repository.
+- Keeps ops migration results limited to counts and booleans while rejecting
+  public-repository destinations, path escapes, symlinks, and existing roots.
+- Requires the complete synthetic suite, wheel/sdist scan and isolated install,
+  real offline Chromium/browser rendering, and disposable-first private cutover
+  before PR readiness.
+
 ## [1.0.0] - 2026-08-01
 
 ### Added

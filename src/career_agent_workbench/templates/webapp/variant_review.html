@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Resume variants</title>
+    <style>
+      body { margin: 2rem auto; width: min(1100px, calc(100% - 2rem)); font-family: system-ui, sans-serif; color: #172033; }
+      article { border: 1px solid #dce2ec; border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+      pre { overflow: auto; background: #f4f6fa; padding: 1rem; white-space: pre-wrap; }
+      .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+      button { padding: .55rem .8rem; }
+    </style>
+  </head>
+  <body>
+    <nav><a href="{{ view.index_url }}">Back to tracker</a></nav>
+    <h1>Resume variants</h1>
+    <p>Selected: {{ application.selected_resume_variant or "none" }} ({{ application.resume_variant_selection_mode }})</p>
+    <form method="post" action="/resumes/{{ application.job_id }}/variants/reset">
+      {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <button type="submit">Reset to automatic preference</button>
+    </form>
+    {% for item in comparisons %}
+      {% set variant = item.variant %}
+      <article data-variant-key="{{ variant.variant_key }}">
+        <h2>{{ variant.variant_label }} ({{ variant.variant_key }})</h2>
+        <p>Parent: {{ item.parent or "none" }} · Source: {{ variant.source }}</p>
+        <p>ATS: {{ variant.ats.score if variant.ats.score is not none else "—" }} · Parsing: {{ variant.ats.parsing_score if variant.ats.parsing_score is not none else "—" }} · Keywords: {{ variant.ats.keyword_score if variant.ats.keyword_score is not none else "—" }} · Semantic: {{ variant.ats.semantic_score if variant.ats.semantic_score is not none else "—" }}</p>
+        <p>Formatting risk: {{ variant.ats.formatting_risk or "—" }} · Missing terms: {{ variant.ats.missing_terms or "—" }}</p>
+        <p>Changed top-level fields: {{ item.changed_fields|join(", ") or "none" }}</p>
+        {% if item.unified_diff %}<pre data-yaml-diff>{{ item.unified_diff|join("\n") }}</pre>{% endif %}
+        <div class="actions">
+          <a href="/resume-html/{{ application.job_id }}/variants/{{ variant.variant_key }}">HTML</a>
+          <a href="/resumes/{{ application.job_id }}/variants/{{ variant.variant_key }}">PDF</a>
+          <a href="/resume-html/{{ application.job_id }}/variants/{{ variant.variant_key }}/download">Download HTML</a>
+          <a href="/resumes/{{ application.job_id }}/variants/{{ variant.variant_key }}/download">Download PDF</a>
+          <form method="post" action="/resumes/{{ application.job_id }}/variants/{{ variant.variant_key }}/use">
+            {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+            <button type="submit">Select exact variant</button>
+          </form>
+        </div>
+      </article>
+    {% else %}
+      <p>No resume variants are available.</p>
+    {% endfor %}
+  </body>
+</html>

@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 import yaml
 
+from career_agent_workbench.artifact_exports import export_rendered_resume
 from career_agent_workbench.application_resume import (
     CORE_SKILLS_PROMPT_JOD_MAX_CHARS,
     apply_core_skill_jod_matches,
@@ -36,7 +37,7 @@ from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
     load_command_config,
-    reject_compatibility_path,
+    resolve_private_workspace_path,
 )
 from career_agent_workbench.config import WorkspaceMember, WorkspacePaths
 from career_agent_workbench.jod import usable_job_description
@@ -149,6 +150,7 @@ async def _generate_one(
     jod_client: Any,
     jod_model: str,
     template: Path | None,
+    artifact_dir: Path | None,
     max_jod_chars: int,
     retries: int,
 ) -> bool:
@@ -236,6 +238,14 @@ async def _generate_one(
         ),
         expected_revision=snapshot.revision,
     )
+    if artifact_dir is not None:
+        export_rendered_resume(
+            paths=paths,
+            output_dir=artifact_dir,
+            job_id=job_id,
+            resume=resume,
+            template_path=template,
+        )
     return True
 
 
@@ -243,7 +253,6 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     try:
-        reject_compatibility_path(args.artifact_dir)
         if not 0 <= args.llm_retries <= 3:
             raise CliConfigurationError("Model execution configuration is invalid.")
         config = load_command_config(
@@ -254,9 +263,28 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.MASTER_RESUME,
             ),
             setting_overrides={
-                "llm_api_model": args.api_model,
+                "core_skill_model": args.api_model,
+                "jod_model": args.jod_model,
                 "llm_api_timeout_seconds": args.llm_timeout_seconds,
             },
+        )
+        template = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.template,
+                must_exist=True,
+            )
+            if args.template is not None
+            else None
+        )
+        artifact_dir = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.artifact_dir,
+                directory=True,
+            )
+            if args.artifact_dir is not None
+            else None
         )
         store = ApplicationStateStore(config.paths)
         selected = set(args.job_ids or ())
@@ -282,8 +310,8 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         break
             print(json.dumps({"candidates": len(eligible), "dry_run": True}))
             return 0
-        core_model = args.api_model or config.settings.llm_api_model
-        jod_model = args.jod_model or config.settings.llm_api_model
+        core_model = config.settings.core_skill_model
+        jod_model = config.settings.jod_model
         core_client = build_llm_client(config.settings, api_model=core_model)
         jod_client = build_llm_client(config.settings, api_model=jod_model)
         processed = 0
@@ -309,11 +337,8 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         core_client=core_client,
                         jod_client=jod_client,
                         jod_model=jod_model,
-                        template=(
-                            args.template.resolve(strict=False)
-                            if args.template is not None
-                            else None
-                        ),
+                        template=template,
+                        artifact_dir=artifact_dir,
                         max_jod_chars=args.max_jod_chars,
                         retries=args.llm_retries,
                     )

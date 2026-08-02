@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from career_agent_workbench.application_state import ApplicationStateStore
@@ -73,6 +74,7 @@ def run_manual_resume_pass(
     job_id: str,
     runner: ModelRunner,
     model_config: CodexModelConfig,
+    template_path: Path | None = None,
     dry_run: bool = False,
 ) -> ManualPassResult:
     """Derive one patch-validated manual candidate from exact stored v2."""
@@ -93,10 +95,13 @@ def run_manual_resume_pass(
         raise ResumeManualPassError("Manual resume workflow input is invalid.")
 
     base_resume = _clone_resume(v2.application_resume)
-    targets = collect_resume_patch_targets(base_resume)
+    targets = collect_resume_patch_targets(
+        base_resume,
+        include_skill_targets=True,
+    )
     job_description = _snapshot_job_description(snapshot)
     initial_diagnostics = _calculate_ats(v2.resume_pdf, job_description)
-    context = _manual_context(v1=v1, v2=v2)
+    context = _manual_context(v1=v1, v2=v2, evidence=evidence)
     prompt = build_resume_patch_prompt(
         workflow="manual",
         snapshot=snapshot,
@@ -117,8 +122,14 @@ def run_manual_resume_pass(
         application_resume=base_resume,
         response=parsed,
         evidence=evidence,
+        allow_skill_updates=True,
+        job_description=job_description,
     )
-    html, pdf, diagnostics = _render_and_score(candidate, job_description)
+    html, pdf, diagnostics = _render_and_score(
+        candidate,
+        job_description,
+        template_path=template_path,
+    )
     result = ManualPassResult(
         changed_count=len(parsed.changes),
         ats_score=diagnostics.score.overall_score,
@@ -163,13 +174,16 @@ def run_manual_resume_pass_for_job(**kwargs: Any) -> ManualPassResult:
     return run_manual_resume_pass(**kwargs)
 
 
-def _manual_context(*, v1: Any, v2: Any) -> Mapping[str, Any]:
+def _manual_context(*, v1: Any, v2: Any, evidence: Any) -> Mapping[str, Any]:
     """Return bounded v1/v2 context without exposing raw model traffic."""
 
     context = {
         "schema_version": MANUAL_PASS_SCHEMA_VERSION,
         "v1_application_resume": _clone_resume(v1.application_resume),
         "v2_application_resume": _clone_resume(v2.application_resume),
+        "canonical_mro_skill_evidence": _clone_inert(
+            evidence.master_resume.get("core_technical_skills")
+        ),
         "v2_structured_audit": {
             "evidence_packet": _clone_inert(v2.evidence_packet),
             "external_critique": _clone_inert(v2.external_critique),

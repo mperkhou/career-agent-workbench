@@ -27,6 +27,7 @@ import yaml
 from career_agent_workbench.config import WorkspaceMember, WorkspacePaths
 from career_agent_workbench.errors import ProviderError, WorkflowError
 from career_agent_workbench.generic_job_scraper import normalize_job_url
+from career_agent_workbench.query_optimizer import StoredQueryOutcome
 
 SCHEMA_VERSION = 1
 DEFAULT_BUSY_TIMEOUT_SECONDS = 1.0
@@ -44,8 +45,11 @@ MAX_JSON_DEPTH = 64
 MAX_JSON_NODES = 100_000
 MAX_NOTES_CHARS = 100_000
 MAX_METADATA_TEXT_CHARS = 500_000
+MAX_CRITIQUE_TEXT_CHARS = 1_000_000
 MAX_BULK_IDENTIFIERS = 500
 MAX_QUERY_RESULTS = 1_000
+MAX_QUERY_HISTORY_RESULTS = 500
+MAX_QUERY_HISTORY_WRITES = 200
 
 APPLICATION_STATUSES = frozenset(
     {"No", "Yes", "N/A", "Rejected", "Accepted for interview"}
@@ -253,6 +257,7 @@ class ApplicationRecord:
     prompt_job_description: str | None = field(repr=False)
     application_resume: Mapping[str, Any] | None = field(repr=False)
     application_resume_backup: Mapping[str, Any] | None = field(repr=False)
+    application_resume_backup_target: str | None
     selected_resume_variant: str | None
     resume_variant_selection_mode: str
     selected_variant: ResumeVariantRecord | None = field(repr=False)
@@ -303,6 +308,32 @@ class ApplicationSeedOutcome:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class QueryOutcomeWrite:
+    """One bounded public-search outcome without job or profile content."""
+
+    keywords: str = field(repr=False)
+    location: str = field(repr=False)
+    date_posted: str
+    workplace_type: str | None
+    experience_level: str | None
+    job_type: str | None
+    sort_by: str
+    limit: int
+    page: int
+    profile_match: float
+    query_score: float
+    results_returned: int
+    fresh_jobs_accepted: int
+    skipped_existing: int = 0
+    skipped_blacklisted: int = 0
+    skipped_workplace_type: int = 0
+    skipped_experience_level: int = 0
+
+    def __repr__(self) -> str:
+        return "QueryOutcomeWrite(configured=True, content_hidden=True)"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class ApplicationWorkflowRevision:
     """Opaque fixed-length revision for one coherent workflow snapshot."""
 
@@ -328,6 +359,8 @@ class ApplicationWorkflowSnapshot:
     application: ApplicationRecord = field(repr=False)
     variants: tuple[ResumeVariantRecord, ...] = field(repr=False)
     revision: ApplicationWorkflowRevision = field(repr=False)
+    edit_revision: ApplicationWorkflowRevision | None = field(default=None, repr=False)
+    active_resume_yaml: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         return "ApplicationWorkflowSnapshot(hidden=True)"
@@ -347,6 +380,7 @@ _APPLICATION_COLUMN_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("application_resume_updated_at", "TEXT"),
     ("application_resume_backup_object", "TEXT"),
     ("application_resume_backup_created_at", "TEXT"),
+    ("application_resume_backup_target", "TEXT"),
     ("resume_html_filename", "TEXT NOT NULL DEFAULT ''"),
     ("resume_html_content", "TEXT"),
     ("resume_html_mime_type", f"TEXT NOT NULL DEFAULT '{_MIME_HTML}'"),
@@ -441,6 +475,26 @@ _APPLICATION_WORKFLOW_REVISION_COLUMNS = (
     "date_posted",
     "experience_level",
     "imported_at",
+)
+
+_APPLICATION_RESUME_EDIT_REVISION_COLUMNS = (
+    *_APPLICATION_WORKFLOW_REVISION_COLUMNS,
+    "aro_yaml",
+    "aro_backup_yaml",
+    "application_resume_object",
+    "application_resume_backup_object",
+    "application_resume_backup_target",
+    "resume_html_content",
+    "resume_content",
+    "ats_score",
+    "ats_parsing_score",
+    "ats_keyword_score",
+    "ats_semantic_score",
+    "ats_formatting_risk",
+    "ats_missing_terms",
+    "ats_diagnostics_json",
+    "selected_resume_variant",
+    "resume_variant_selection_mode",
 )
 
 _VARIANT_WORKFLOW_REVISION_COLUMNS = (
@@ -576,6 +630,7 @@ class ApplicationStateStore:
             self._ensure_applications_table(connection)
             self._inject_failure("initialize_after_first_statement")
             self._ensure_variants_table(connection)
+            self._ensure_query_outcomes_table(connection)
             self._migrate_legacy_state(connection)
             if not _schema_is_initialized(connection):
                 raise _UnsafeSchema
@@ -699,6 +754,12 @@ class ApplicationStateStore:
                 application=application,
                 variants=variants,
                 revision=revision,
+                edit_revision=ApplicationWorkflowRevision(
+                    _resume_edit_revision_digest(application_row, variant_rows)
+                ),
+                active_resume_yaml=_snapshot_active_resume_yaml(
+                    application_row, variant_rows
+                ),
             )
 
         return self._read(read)
@@ -839,16 +900,22 @@ class ApplicationStateStore:
         *,
         source_text: str,
         prompt_text: str,
+        ats: AtsFields | None = None,
     ) -> ApplicationRecord:
         """Persist caller-supplied source and prompt-trimmed JOD text."""
 
         validated_id = _identifier(job_id)
         source = _text(source_text, MAX_JOD_SOURCE_CHARS, required=False)
         prompt = _text(prompt_text, MAX_JOD_PROMPT_CHARS, required=False)
+        ats_values = None if ats is None else _ats(ats)
         now = self._timestamp()
 
         def write(connection: sqlite3.Connection) -> ApplicationRecord:
-            self._require_application(connection, validated_id)
+            application = connection.execute(
+                "SELECT * FROM applications WHERE job_id = ?", (validated_id,)
+            ).fetchone()
+            if application is None:
+                raise _MissingRecord
             connection.execute(
                 """
                 UPDATE applications
@@ -857,7 +924,240 @@ class ApplicationStateStore:
                 """,
                 (source, prompt, now, validated_id),
             )
+            if ats_values is not None:
+                selected = _stored_variant_key(application["selected_resume_variant"])
+                self._write_ats_projection(
+                    connection,
+                    validated_id,
+                    selected,
+                    ats_values,
+                    timestamp=now,
+                )
             return self._load_application(connection, validated_id)
+
+        return self._write(write)
+
+    def store_ats(self, job_id: str, ats: AtsFields) -> ApplicationRecord:
+        """Persist only caller-supplied ATS fields for the active projection."""
+
+        validated_id = _identifier(job_id)
+        ats_values = _ats(ats)
+        now = self._timestamp()
+
+        def write(connection: sqlite3.Connection) -> ApplicationRecord:
+            application = connection.execute(
+                "SELECT * FROM applications WHERE job_id = ?", (validated_id,)
+            ).fetchone()
+            if application is None:
+                raise _MissingRecord
+            selected = _stored_variant_key(application["selected_resume_variant"])
+            self._write_ats_projection(
+                connection,
+                validated_id,
+                selected,
+                ats_values,
+                timestamp=now,
+            )
+            return self._load_application(connection, validated_id)
+
+        return self._write(write)
+
+    def store_active_resume_if_revision(
+        self,
+        job_id: str,
+        *,
+        yaml_text: str,
+        resume_html: str,
+        resume_pdf: bytes,
+        ats: AtsFields | None,
+        expected_revision: ApplicationWorkflowRevision,
+        backup_current: bool,
+    ) -> ApplicationRecord:
+        """Atomically render into the exact active target under CAS control."""
+
+        validated_id = _identifier(job_id)
+        _validate_yaml_text(yaml_text)
+        html = _text(resume_html, MAX_HTML_CHARS, required=True)
+        pdf = _optional_bytes(resume_pdf, MAX_PDF_BYTES)
+        if pdf is None or not pdf or type(backup_current) is not bool:
+            raise ApplicationStateValidationError(_VALIDATION_ERROR)
+        ats_values = None if ats is None else _ats(ats)
+        expected = _expected_workflow_revision(expected_revision)
+        now = self._timestamp()
+
+        def write(connection: sqlite3.Connection) -> ApplicationRecord:
+            application = connection.execute(
+                "SELECT * FROM applications WHERE job_id = ?", (validated_id,)
+            ).fetchone()
+            if application is None:
+                raise _MissingRecord
+            variant_rows = self._workflow_variant_rows(connection, validated_id)
+            if _resume_edit_revision_digest(application, variant_rows) != expected:
+                raise _RevisionConflict
+            target = _active_resume_target(application)
+            current_yaml = self._active_resume_yaml(
+                connection, validated_id, application, target
+            )
+            if backup_current:
+                connection.execute(
+                    """
+                    UPDATE applications
+                    SET aro_backup_yaml = ?, application_resume_backup_object = ?,
+                        application_resume_backup_created_at = ?,
+                        application_resume_backup_target = ?
+                    WHERE job_id = ?
+                    """,
+                    (current_yaml, current_yaml, now, target, validated_id),
+                )
+            self._write_active_resume(
+                connection,
+                validated_id,
+                application,
+                target,
+                yaml_text=yaml_text,
+                resume_html=html,
+                resume_pdf=pdf,
+                ats_values=ats_values,
+                timestamp=now,
+            )
+            return self._load_application(connection, validated_id)
+
+        return self._write(write)
+
+    def revert_active_resume_if_revision(
+        self,
+        job_id: str,
+        *,
+        resume_html: str,
+        resume_pdf: bytes,
+        ats: AtsFields | None,
+        expected_revision: ApplicationWorkflowRevision,
+    ) -> ApplicationRecord:
+        """Swap the active YAML with its target-bound one-level backup."""
+
+        validated_id = _identifier(job_id)
+        html = _text(resume_html, MAX_HTML_CHARS, required=True)
+        pdf = _optional_bytes(resume_pdf, MAX_PDF_BYTES)
+        if pdf is None or not pdf:
+            raise ApplicationStateValidationError(_VALIDATION_ERROR)
+        ats_values = None if ats is None else _ats(ats)
+        expected = _expected_workflow_revision(expected_revision)
+        now = self._timestamp()
+
+        def write(connection: sqlite3.Connection) -> ApplicationRecord:
+            application = connection.execute(
+                "SELECT * FROM applications WHERE job_id = ?", (validated_id,)
+            ).fetchone()
+            if application is None:
+                raise _MissingRecord
+            variant_rows = self._workflow_variant_rows(connection, validated_id)
+            if _resume_edit_revision_digest(application, variant_rows) != expected:
+                raise _RevisionConflict
+            target = _active_resume_target(application)
+            backup_target = _stored_backup_target(
+                application["application_resume_backup_target"]
+            )
+            backup_yaml = _stored_optional_text(
+                application["aro_backup_yaml"], MAX_ARO_YAML_BYTES
+            )
+            if backup_target != target or backup_yaml is None:
+                raise _InvalidWrite
+            _validate_yaml_text(backup_yaml)
+            current_yaml = self._active_resume_yaml(
+                connection, validated_id, application, target
+            )
+            connection.execute(
+                """
+                UPDATE applications
+                SET aro_backup_yaml = ?, application_resume_backup_object = ?,
+                    application_resume_backup_created_at = ?,
+                    application_resume_backup_target = ?
+                WHERE job_id = ?
+                """,
+                (current_yaml, current_yaml, now, target, validated_id),
+            )
+            self._write_active_resume(
+                connection,
+                validated_id,
+                application,
+                target,
+                yaml_text=backup_yaml,
+                resume_html=html,
+                resume_pdf=pdf,
+                ats_values=ats_values,
+                timestamp=now,
+            )
+            return self._load_application(connection, validated_id)
+
+        return self._write(write)
+
+    def load_query_outcomes(
+        self,
+        *,
+        limit: int = MAX_QUERY_HISTORY_RESULTS,
+    ) -> tuple[StoredQueryOutcome, ...]:
+        """Load a bounded newest-first history for deterministic reuse."""
+
+        if type(limit) is not int or not 1 <= limit <= MAX_QUERY_HISTORY_RESULTS:
+            raise ApplicationStateValidationError(_VALIDATION_ERROR)
+
+        def read(connection: sqlite3.Connection) -> tuple[StoredQueryOutcome, ...]:
+            rows = connection.execute(
+                """
+                SELECT keywords, location, date_posted, workplace_type,
+                       experience_level, job_type, sort_by, limit_value,
+                       profile_match, query_score, results_returned,
+                       fresh_jobs_accepted, skipped_existing,
+                       skipped_blacklisted, skipped_workplace_type,
+                       skipped_experience_level, resumes_generated,
+                       average_ats_score
+                FROM search_query_outcomes
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return tuple(_stored_query_outcome(row) for row in rows)
+
+        return self._read(read)
+
+    def record_query_outcomes(self, outcomes: Sequence[QueryOutcomeWrite]) -> int:
+        """Persist one bounded run atomically without returning content."""
+
+        if (
+            type(outcomes) not in {list, tuple}
+            or len(outcomes) > MAX_QUERY_HISTORY_WRITES
+        ):
+            raise ApplicationStateValidationError(_VALIDATION_ERROR)
+        values = tuple(_query_outcome_values(value) for value in outcomes)
+        now = self._timestamp()
+
+        def write(connection: sqlite3.Connection) -> int:
+            connection.executemany(
+                """
+                INSERT INTO search_query_outcomes (
+                    created_at, keywords, location, date_posted, workplace_type,
+                    experience_level, job_type, sort_by, limit_value, page,
+                    profile_match, query_score, results_returned,
+                    fresh_jobs_accepted, skipped_existing, skipped_blacklisted,
+                    skipped_workplace_type, skipped_experience_level,
+                    resumes_generated, average_ats_score, artifact_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ((now, *value) for value in values),
+            )
+            connection.execute(
+                """
+                DELETE FROM search_query_outcomes
+                WHERE id NOT IN (
+                    SELECT id FROM search_query_outcomes
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                )
+                """,
+                (MAX_QUERY_HISTORY_RESULTS,),
+            )
+            return len(values)
 
         return self._write(write)
 
@@ -1372,6 +1672,9 @@ class ApplicationStateStore:
             ),
             application_resume=application_resume,
             application_resume_backup=backup,
+            application_resume_backup_target=_stored_backup_target(
+                row["application_resume_backup_target"]
+            ),
             selected_resume_variant=selected_key,
             resume_variant_selection_mode=mode.value,
             selected_variant=selected,
@@ -1709,6 +2012,161 @@ class ApplicationStateStore:
         ).fetchone()
         return None if row is None else str(row["variant_key"])
 
+    def _write_ats_projection(
+        self,
+        connection: sqlite3.Connection,
+        job_id: str,
+        selected: str | None,
+        ats_values: tuple[Any, ...],
+        *,
+        timestamp: str,
+    ) -> None:
+        if selected is not None:
+            cursor = connection.execute(
+                """
+                UPDATE application_resume_variants
+                SET ats_score = ?, ats_parsing_score = ?, ats_keyword_score = ?,
+                    ats_semantic_score = ?, ats_formatting_risk = ?,
+                    ats_missing_terms = ?, ats_updated_at = ?,
+                    ats_diagnostics_json = ?, updated_at = ?
+                WHERE job_id = ? AND variant_key = ?
+                """,
+                (*ats_values, timestamp, job_id, selected),
+            )
+            if cursor.rowcount != 1:
+                raise _MissingRecord
+        connection.execute(
+            """
+            UPDATE applications
+            SET ats_score = ?, ats_parsing_score = ?, ats_keyword_score = ?,
+                ats_semantic_score = ?, ats_formatting_risk = ?,
+                ats_missing_terms = ?, ats_updated_at = ?,
+                ats_diagnostics_json = ?, updated_at = ?
+            WHERE job_id = ?
+            """,
+            (*ats_values, timestamp, job_id),
+        )
+
+    def _active_resume_yaml(
+        self,
+        connection: sqlite3.Connection,
+        job_id: str,
+        application: sqlite3.Row,
+        target: str,
+    ) -> str:
+        if target == "fallback":
+            value = application["aro_yaml"]
+        else:
+            row = connection.execute(
+                """
+                SELECT application_resume_object
+                FROM application_resume_variants
+                WHERE job_id = ? AND variant_key = ?
+                """,
+                (job_id, target),
+            ).fetchone()
+            if row is None:
+                raise _MissingRecord
+            value = row["application_resume_object"]
+        rendered = _stored_text(value, MAX_ARO_YAML_BYTES)
+        _validate_yaml_text(rendered)
+        return rendered
+
+    def _write_active_resume(
+        self,
+        connection: sqlite3.Connection,
+        job_id: str,
+        application: sqlite3.Row,
+        target: str,
+        *,
+        yaml_text: str,
+        resume_html: str,
+        resume_pdf: bytes,
+        ats_values: tuple[Any, ...] | None,
+        timestamp: str,
+    ) -> None:
+        html_filename = artifact_filename(job_id, ArtifactKind.RESUME_HTML)
+        pdf_filename = artifact_filename(job_id, ArtifactKind.RESUME_PDF)
+        if target == "fallback":
+            connection.execute(
+                """
+                UPDATE applications
+                SET aro_yaml = ?, application_resume_object = ?,
+                    application_resume_updated_at = ?,
+                    resume_html_filename = ?, resume_html_content = ?,
+                    resume_html_mime_type = ?, resume_html_updated_at = ?,
+                    resume_filename = ?, resume_content = ?, resume_mime_type = ?,
+                    resume_updated_at = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    yaml_text,
+                    yaml_text,
+                    timestamp,
+                    html_filename,
+                    resume_html,
+                    _MIME_HTML,
+                    timestamp,
+                    pdf_filename,
+                    resume_pdf,
+                    _MIME_PDF,
+                    timestamp,
+                    timestamp,
+                    job_id,
+                ),
+            )
+            if ats_values is not None:
+                self._write_ats_projection(
+                    connection,
+                    job_id,
+                    None,
+                    ats_values,
+                    timestamp=timestamp,
+                )
+            return
+        cursor = connection.execute(
+            """
+            UPDATE application_resume_variants
+            SET application_resume_object = ?,
+                resume_html_filename = ?, resume_html_content = ?,
+                resume_html_mime_type = ?, resume_html_updated_at = ?,
+                resume_filename = ?, resume_content = ?, resume_mime_type = ?,
+                resume_updated_at = ?, updated_at = ?
+            WHERE job_id = ? AND variant_key = ?
+            """,
+            (
+                yaml_text,
+                html_filename,
+                resume_html,
+                _MIME_HTML,
+                timestamp,
+                pdf_filename,
+                resume_pdf,
+                _MIME_PDF,
+                timestamp,
+                timestamp,
+                job_id,
+                target,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise _MissingRecord
+        if ats_values is not None:
+            self._write_ats_projection(
+                connection,
+                job_id,
+                target,
+                ats_values,
+                timestamp=timestamp,
+            )
+        self._project_variant(
+            connection,
+            job_id,
+            target,
+            _stored_mode(application["resume_variant_selection_mode"]),
+            touch_updated_at=timestamp,
+        )
+
     def _project_variant(
         self,
         connection: sqlite3.Connection,
@@ -1880,6 +2338,70 @@ class ApplicationStateStore:
             """
             CREATE INDEX IF NOT EXISTS application_resume_variants_variant_key
             ON application_resume_variants(variant_key)
+            """
+        )
+
+    def _ensure_query_outcomes_table(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS search_query_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                keywords TEXT NOT NULL,
+                location TEXT NOT NULL,
+                date_posted TEXT NOT NULL,
+                workplace_type TEXT,
+                experience_level TEXT,
+                job_type TEXT,
+                sort_by TEXT NOT NULL,
+                limit_value INTEGER NOT NULL,
+                page INTEGER NOT NULL,
+                profile_match REAL NOT NULL,
+                query_score REAL NOT NULL,
+                results_returned INTEGER NOT NULL,
+                fresh_jobs_accepted INTEGER NOT NULL,
+                skipped_existing INTEGER NOT NULL DEFAULT 0,
+                skipped_blacklisted INTEGER NOT NULL DEFAULT 0,
+                skipped_workplace_type INTEGER NOT NULL DEFAULT 0,
+                skipped_experience_level INTEGER NOT NULL DEFAULT 0,
+                resumes_generated INTEGER NOT NULL DEFAULT 0,
+                average_ats_score REAL,
+                artifact_mode TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        required = {
+            "id",
+            "created_at",
+            "keywords",
+            "location",
+            "date_posted",
+            "workplace_type",
+            "experience_level",
+            "job_type",
+            "sort_by",
+            "limit_value",
+            "page",
+            "profile_match",
+            "query_score",
+            "results_returned",
+            "fresh_jobs_accepted",
+            "skipped_existing",
+            "skipped_blacklisted",
+            "skipped_workplace_type",
+            "skipped_experience_level",
+            "resumes_generated",
+            "average_ats_score",
+            "artifact_mode",
+            "updated_at",
+        }
+        if not required <= _table_columns(connection, "search_query_outcomes"):
+            raise _UnsafeSchema
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS search_query_outcomes_keywords_idx
+            ON search_query_outcomes(keywords, location, workplace_type)
             """
         )
 
@@ -2507,6 +3029,24 @@ def _expected_workflow_revision(value: object) -> bytes:
     return raw
 
 
+def workflow_revision_token(value: ApplicationWorkflowRevision) -> str:
+    """Encode one opaque revision for a same-origin form round trip."""
+
+    return _expected_workflow_revision(value).hex()
+
+
+def workflow_revision_from_token(value: object) -> ApplicationWorkflowRevision:
+    """Decode an exact public revision token without exposing state content."""
+
+    if type(value) is not str or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ApplicationStateValidationError(_VALIDATION_ERROR)
+    try:
+        raw = bytes.fromhex(value)
+    except ValueError:
+        raise ApplicationStateValidationError(_VALIDATION_ERROR) from None
+    return ApplicationWorkflowRevision(raw)
+
+
 def _workflow_revision_digest(
     application_row: sqlite3.Row,
     variant_rows: tuple[sqlite3.Row, ...],
@@ -2521,6 +3061,40 @@ def _workflow_revision_digest(
         for column in _VARIANT_WORKFLOW_REVISION_COLUMNS:
             _update_workflow_digest(digest, column, row[column])
     return digest.digest()
+
+
+def _resume_edit_revision_digest(
+    application_row: sqlite3.Row,
+    variant_rows: tuple[sqlite3.Row, ...],
+) -> bytes:
+    digest = hashlib.sha256()
+    digest.update(b"career-agent-workbench:resume-edit-revision:v1")
+    for column in _APPLICATION_RESUME_EDIT_REVISION_COLUMNS:
+        _update_workflow_digest(digest, column, application_row[column])
+    digest.update(len(variant_rows).to_bytes(1, "big"))
+    for row in variant_rows:
+        digest.update(b"variant")
+        for column in _VARIANT_WORKFLOW_REVISION_COLUMNS:
+            _update_workflow_digest(digest, column, row[column])
+    return digest.digest()
+
+
+def _snapshot_active_resume_yaml(
+    application_row: sqlite3.Row,
+    variant_rows: tuple[sqlite3.Row, ...],
+) -> str | None:
+    selected = _stored_variant_key(application_row["selected_resume_variant"])
+    value: object = application_row["aro_yaml"]
+    if selected is not None:
+        matching = tuple(row for row in variant_rows if row["variant_key"] == selected)
+        if len(matching) != 1:
+            raise _CorruptRecord
+        value = matching[0]["application_resume_object"]
+    if value is None:
+        return None
+    rendered = _stored_text(value, MAX_ARO_YAML_BYTES)
+    _validate_yaml_text(rendered)
+    return rendered
 
 
 def _update_workflow_digest(
@@ -2672,6 +3246,48 @@ def _result_limit(value: object) -> int:
     return value
 
 
+def _bounded_counter(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_QUERY_RESULTS:
+        raise ApplicationStateValidationError(_VALIDATION_ERROR)
+    return value
+
+
+def _unit_score(value: object) -> float:
+    if type(value) not in {int, float}:
+        raise ApplicationStateValidationError(_VALIDATION_ERROR)
+    rendered = float(value)
+    if not math.isfinite(rendered) or not 0.0 <= rendered <= 1.0:
+        raise ApplicationStateValidationError(_VALIDATION_ERROR)
+    return rendered
+
+
+def _query_outcome_values(value: object) -> tuple[Any, ...]:
+    if type(value) is not QueryOutcomeWrite:
+        raise ApplicationStateValidationError(_VALIDATION_ERROR)
+    return (
+        _text(value.keywords, MAX_LABEL_CHARS, required=True),
+        _text(value.location, MAX_LABEL_CHARS, required=False),
+        _text(value.date_posted, 64, required=True),
+        _optional_text(value.workplace_type, 64),
+        _optional_text(value.experience_level, 64),
+        _optional_text(value.job_type, 64),
+        _text(value.sort_by, 64, required=True),
+        _result_limit(value.limit),
+        _bounded_counter(value.page),
+        _unit_score(value.profile_match),
+        _unit_score(value.query_score),
+        _bounded_counter(value.results_returned),
+        _bounded_counter(value.fresh_jobs_accepted),
+        _bounded_counter(value.skipped_existing),
+        _bounded_counter(value.skipped_blacklisted),
+        _bounded_counter(value.skipped_workplace_type),
+        _bounded_counter(value.skipped_experience_level),
+        0,
+        None,
+        "application-seed",
+    )
+
+
 def _bulk_identifiers(
     values: object,
     *,
@@ -2778,10 +3394,10 @@ def _variant_write(
         "evidence_packet_json": _optional_json_mapping(value.evidence_packet),
         "external_critique_json": _optional_json_mapping(value.external_critique),
         "critique_prompt": _optional_text(
-            value.critique_prompt, MAX_METADATA_TEXT_CHARS
+            value.critique_prompt, MAX_CRITIQUE_TEXT_CHARS
         ),
         "critique_response": _optional_text(
-            value.critique_response, MAX_METADATA_TEXT_CHARS
+            value.critique_response, MAX_CRITIQUE_TEXT_CHARS
         ),
         "critique_json": _optional_json_mapping(value.critique),
         "validation_json": _optional_json_mapping(value.validation),
@@ -3155,10 +3771,10 @@ def _variant_record(
         evidence_packet=_decode_optional_json(row["evidence_packet_json"]),
         external_critique=_decode_optional_json(row["external_critique_json"]),
         critique_prompt=_stored_optional_text(
-            row["critique_prompt"], MAX_METADATA_TEXT_CHARS
+            row["critique_prompt"], MAX_CRITIQUE_TEXT_CHARS
         ),
         critique_response=_stored_optional_text(
-            row["critique_response"], MAX_METADATA_TEXT_CHARS
+            row["critique_response"], MAX_CRITIQUE_TEXT_CHARS
         ),
         critique=_decode_optional_json(row["critique_json"]),
         validation=_decode_optional_json(row["validation_json"]),
@@ -3216,10 +3832,75 @@ def _stored_score(value: object) -> int | None:
     return value
 
 
+def _stored_query_outcome(row: sqlite3.Row) -> StoredQueryOutcome:
+    profile_match = row["profile_match"]
+    query_score = row["query_score"]
+    average_ats_score = row["average_ats_score"]
+    if (
+        type(profile_match) not in {int, float}
+        or not math.isfinite(float(profile_match))
+        or not 0.0 <= float(profile_match) <= 1.0
+        or type(query_score) not in {int, float}
+        or not math.isfinite(float(query_score))
+        or not 0.0 <= float(query_score) <= 1.0
+    ):
+        raise _CorruptRecord
+    if average_ats_score is not None and (
+        type(average_ats_score) not in {int, float}
+        or not math.isfinite(float(average_ats_score))
+        or not 0.0 <= float(average_ats_score) <= 100.0
+    ):
+        raise _CorruptRecord
+
+    def counter(name: str) -> int:
+        value = row[name]
+        if type(value) is not int or not 0 <= value <= MAX_QUERY_RESULTS:
+            raise _CorruptRecord
+        return value
+
+    limit = counter("limit_value")
+    if limit == 0:
+        raise _CorruptRecord
+    return StoredQueryOutcome(
+        keywords=_stored_text(row["keywords"], MAX_LABEL_CHARS),
+        location=_stored_text(row["location"], MAX_LABEL_CHARS),
+        date_posted=_stored_text(row["date_posted"], 64),
+        workplace_type=_stored_optional_text(row["workplace_type"], 64),
+        experience_level=_stored_optional_text(row["experience_level"], 64),
+        job_type=_stored_optional_text(row["job_type"], 64),
+        sort_by=_stored_text(row["sort_by"], 64),
+        limit=limit,
+        profile_match=float(profile_match),
+        query_score=float(query_score),
+        results_returned=counter("results_returned"),
+        fresh_jobs_accepted=counter("fresh_jobs_accepted"),
+        skipped_existing=counter("skipped_existing"),
+        skipped_blacklisted=counter("skipped_blacklisted"),
+        skipped_workplace_type=counter("skipped_workplace_type"),
+        skipped_experience_level=counter("skipped_experience_level"),
+        resumes_generated=counter("resumes_generated"),
+        average_ats_score=(
+            None if average_ats_score is None else float(average_ats_score)
+        ),
+    )
+
+
 def _stored_variant_key(value: object) -> str | None:
     if value is None or value == "":
         return None
     if type(value) is not str or value not in VARIANT_KEYS:
+        raise _CorruptRecord
+    return value
+
+
+def _active_resume_target(application: sqlite3.Row) -> str:
+    return _stored_variant_key(application["selected_resume_variant"]) or "fallback"
+
+
+def _stored_backup_target(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if type(value) is not str or value not in {"fallback", *VARIANT_KEYS}:
         raise _CorruptRecord
     return value
 
@@ -3272,13 +3953,18 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 
 def _schema_is_initialized(connection: sqlite3.Connection) -> bool:
-    if not _table_exists(connection, "applications") or not _table_exists(
-        connection,
-        "application_resume_variants",
+    if not all(
+        _table_exists(connection, name)
+        for name in (
+            "applications",
+            "application_resume_variants",
+            "search_query_outcomes",
+        )
     ):
         return False
     application_columns = _table_columns(connection, "applications")
     variant_columns = _table_columns(connection, "application_resume_variants")
+    query_columns = _table_columns(connection, "search_query_outcomes")
     required_application_columns = {
         "job_id",
         *(name for name, _ in _APPLICATION_COLUMN_DEFINITIONS),
@@ -3291,6 +3977,18 @@ def _schema_is_initialized(connection: sqlite3.Connection) -> bool:
     if not required_application_columns <= application_columns:
         return False
     if not required_variant_columns <= variant_columns:
+        return False
+    if (
+        not {
+            "id",
+            "created_at",
+            "keywords",
+            "location",
+            "query_score",
+            "fresh_jobs_accepted",
+        }
+        <= query_columns
+    ):
         return False
     return all(
         (
@@ -3322,6 +4020,13 @@ def _schema_is_initialized(connection: sqlite3.Connection) -> bool:
                 unique=False,
                 columns=("variant_key",),
             ),
+            _index_matches(
+                connection,
+                table="search_query_outcomes",
+                name="search_query_outcomes_keywords_idx",
+                unique=False,
+                columns=("keywords", "location", "workplace_type"),
+            ),
         )
     )
 
@@ -3348,6 +4053,7 @@ def _index_matches(
             "application_resume_variants",
             "application_resume_variants_variant_key",
         ),
+        ("search_query_outcomes", "search_query_outcomes_keywords_idx"),
     }
     if (table, name) not in allowed:
         raise _UnsafeSchema
@@ -3372,7 +4078,11 @@ def _index_matches(
 
 
 def _table_columns(connection: sqlite3.Connection, name: str) -> set[str]:
-    if name not in {"applications", "application_resume_variants"}:
+    if name not in {
+        "applications",
+        "application_resume_variants",
+        "search_query_outcomes",
+    }:
         raise _UnsafeSchema
     return {
         str(row["name"])
@@ -3410,6 +4120,7 @@ __all__ = [
     "APPLICATION_STATUSES",
     "MAX_BULK_IDENTIFIERS",
     "MAX_QUERY_RESULTS",
+    "MAX_QUERY_HISTORY_RESULTS",
     "SCHEMA_VERSION",
     "ApplicationMetadata",
     "ApplicationRecord",
@@ -3429,9 +4140,12 @@ __all__ = [
     "ApplicationWorkflowSnapshot",
     "ArtifactKind",
     "AtsFields",
+    "QueryOutcomeWrite",
     "ResumeSelectionMode",
     "ResumeVariantKey",
     "ResumeVariantRecord",
     "ResumeVariantWrite",
     "artifact_filename",
+    "workflow_revision_from_token",
+    "workflow_revision_token",
 ]

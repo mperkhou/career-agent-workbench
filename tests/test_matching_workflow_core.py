@@ -11,6 +11,7 @@ from career_agent_workbench.application_state import (
     ApplicationMetadata,
     ApplicationStateNotFoundError,
     ApplicationStateStore,
+    QueryOutcomeWrite,
 )
 from career_agent_workbench.config import WorkspacePaths
 from career_agent_workbench.models import (
@@ -603,7 +604,7 @@ def test_state_seed_failure_aborts_after_prior_atomic_candidate(
         actual.get_application("seed-2")
 
 
-def test_matching_uses_history_and_supplements_without_persisting_history(
+def test_matching_uses_history_and_persists_bounded_query_outcomes(
     tmp_path: Path,
 ) -> None:
     paths = _paths(tmp_path)
@@ -630,7 +631,6 @@ def test_matching_uses_history_and_supplements_without_persisting_history(
         store=store,
         paths=paths,
     )
-    before = paths.database.read_bytes()
     result = asyncio.run(
         workflow.run(
             bounds=_bounds(),
@@ -638,11 +638,42 @@ def test_matching_uses_history_and_supplements_without_persisting_history(
             supplemental_queries=(_query("Automation Engineer"),),
         )
     )
-    after = paths.database.read_bytes()
 
     assert result.queries_planned >= 2
     assert result.jobs_seeded == 0
-    assert before == after
+    persisted = store.load_query_outcomes()
+    assert len(persisted) == result.queries_searched
+    assert all(item.results_returned == 0 for item in persisted)
+    store.record_query_outcomes(
+        (
+            QueryOutcomeWrite(
+                keywords="Reliability Engineer",
+                location="Example Region",
+                date_posted="past_week",
+                workplace_type="remote",
+                experience_level="mid_senior",
+                job_type="full_time",
+                sort_by="recent",
+                limit=10,
+                page=1,
+                profile_match=0.5,
+                query_score=0.8,
+                results_returned=5,
+                fresh_jobs_accepted=2,
+            ),
+        )
+    )
+
+    reused_service = _Service((), {})
+    reused = MatchingWorkflow(
+        service=reused_service,
+        planner=_Planner(()),
+        store=store,
+        paths=paths,
+    )
+    reused_result = asyncio.run(reused.run(bounds=_bounds()))
+    assert reused_result.queries_planned >= 1
+    assert reused_service.search_calls >= 1
 
 
 def test_history_reuse_has_no_hard_coded_remote_preference(

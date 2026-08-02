@@ -118,8 +118,20 @@ _WHEEL_REQUIRED = frozenset(
     {
         "career_agent_workbench/__init__.py",
         "career_agent_workbench/__main__.py",
+        "career_agent_workbench/cover_letter_rendering.py",
+        "career_agent_workbench/static/webapp/app.js",
         "career_agent_workbench/templates/resume/master_resume.html.j2",
+        "career_agent_workbench/templates/webapp/add.html",
+        "career_agent_workbench/templates/webapp/cover_letter_edit.html",
         "career_agent_workbench/templates/webapp/index.html",
+        "career_agent_workbench/templates/webapp/jod.html",
+        "career_agent_workbench/templates/webapp/resume_edit.html",
+        "career_agent_workbench/templates/webapp/variant_review.html",
+        "career_agent_workbench/webapp_actions.py",
+        "career_agent_workbench/webapp_artifacts.py",
+        "career_agent_workbench/webapp_editors.py",
+        "career_agent_workbench/webapp_ingestion.py",
+        "career_agent_workbench/webapp_tracker.py",
     }
 )
 
@@ -549,13 +561,23 @@ def installed_smoke(expected_prefix: Path) -> None:
     try:
         prefix = Path(expected_prefix).resolve(strict=True)
         import career_agent_workbench
+        from importlib.metadata import distribution
+
+        from career_agent_workbench import (
+            cover_letter_rendering,
+            webapp_actions,
+            webapp_artifacts,
+            webapp_editors,
+            webapp_ingestion,
+            webapp_tracker,
+        )
         from career_agent_workbench.resume_rendering import (
             render_resume_html_from_mapping,
         )
 
         module_file = Path(career_agent_workbench.__file__).resolve(strict=True)
         module_file.relative_to(prefix)
-        if career_agent_workbench.__version__ != "1.0.0":
+        if career_agent_workbench.__version__ != "1.1.0":
             raise SafetyCheckError("Public-safety check failed.")
         package = resources.files("career_agent_workbench")
         resume_template = package.joinpath(
@@ -564,7 +586,59 @@ def installed_smoke(expected_prefix: Path) -> None:
         web_template = package.joinpath("templates", "webapp", "index.html").read_text(
             "utf-8"
         )
-        if not resume_template or not web_template:
+        web_resources = (
+            package.joinpath("templates", "webapp", name).read_text("utf-8")
+            for name in (
+                "add.html",
+                "cover_letter_edit.html",
+                "jod.html",
+                "resume_edit.html",
+                "variant_review.html",
+            )
+        )
+        static_script = package.joinpath("static", "webapp", "app.js").read_text(
+            "utf-8"
+        )
+        if (
+            not resume_template
+            or not web_template
+            or not all(web_resources)
+            or not static_script
+        ):
+            raise SafetyCheckError("Public-safety check failed.")
+        modules = (
+            cover_letter_rendering,
+            webapp_actions,
+            webapp_artifacts,
+            webapp_editors,
+            webapp_ingestion,
+            webapp_tracker,
+        )
+        if any(
+            not Path(module.__file__).resolve().is_relative_to(prefix)
+            for module in modules
+        ):
+            raise SafetyCheckError("Public-safety check failed.")
+        expected_entries = {
+            "career-agent-workbench": "career_agent_workbench.__main__:main",
+            "career-agent-workbench-audit-jods": (
+                "career_agent_workbench.jod_cleaner_audit:main"
+            ),
+            "career-agent-workbench-refine-resume": (
+                "career_agent_workbench.resume_refinement_cli:main"
+            ),
+            "career-agent-workbench-seed-jobs": (
+                "career_agent_workbench.workflows.matching:main"
+            ),
+            "career-agent-workbench-webapp": "career_agent_workbench.webapp:main",
+            "career-agent-workbench-mcp": "career_agent_workbench.server:main",
+        }
+        installed_entries = {
+            entry.name: entry.value
+            for entry in distribution("career-agent-workbench").entry_points
+            if entry.group == "console_scripts" and entry.name in expected_entries
+        }
+        if installed_entries != expected_entries:
             raise SafetyCheckError("Public-safety check failed.")
         name = "Jules <Example>"
         rendered = render_resume_html_from_mapping(

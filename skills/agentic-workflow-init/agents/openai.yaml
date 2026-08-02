@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Workflow Init"
+  short_description: "Bootstrap committed workflow plans and tracker bindings."
+  default_prompt: "Use $agentic-workflow-init to create a committed workflow plan and ignored runtime binding before implementation."

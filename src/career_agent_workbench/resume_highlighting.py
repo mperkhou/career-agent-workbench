@@ -6,6 +6,7 @@ import json
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -144,6 +145,10 @@ def highlight_resume_for_job(
     variant_override: str | None = None,
     following_variant: str | None = None,
     combined_variants: tuple[str, ...] = (),
+    template_path: Path | None = None,
+    max_strong_spans_per_bullet: int = DEFAULT_MAX_STRONG_SPANS_PER_BULLET,
+    experience_company: str | None = None,
+    experience_job_order: str | None = None,
     dry_run: bool = False,
 ) -> HighlightResult:
     """Apply exact wrapper-only emphasis to one snapshotted existing variant."""
@@ -166,11 +171,16 @@ def highlight_resume_for_job(
     variants = _variant_map(snapshot)
     target_variant = variants[target_key]
     base_resume = _clone_resume(target_variant.application_resume)
-    bullets = collect_highlight_bullets(base_resume)
+    bullets = collect_highlight_bullets(
+        base_resume,
+        experience_company=experience_company,
+        experience_job_order=experience_job_order,
+    )
     prompt = build_resume_highlight_prompt(
         snapshot=snapshot,
         target_variant=target_variant,
         bullets=bullets,
+        max_strong_spans_per_bullet=max_strong_spans_per_bullet,
     )
     response, logical_metadata = _run_highlight_model(
         runner=runner,
@@ -180,10 +190,16 @@ def highlight_resume_for_job(
     candidate, stats = apply_highlight_response(
         base_resume,
         response,
-        max_strong_spans_per_bullet=DEFAULT_MAX_STRONG_SPANS_PER_BULLET,
+        max_strong_spans_per_bullet=max_strong_spans_per_bullet,
+        experience_company=experience_company,
+        experience_job_order=experience_job_order,
     )
     job_description = _snapshot_job_description(snapshot)
-    html, pdf, diagnostics = _render_and_score(candidate, job_description)
+    html, pdf, diagnostics = _render_and_score(
+        candidate,
+        job_description,
+        template_path=template_path,
+    )
     result = HighlightResult(
         target_variant=target_key,
         bullet_count=stats.bullet_count,
@@ -277,6 +293,9 @@ def resolve_highlight_variant(
 
 def collect_highlight_bullets(
     application_resume: Mapping[str, Any],
+    *,
+    experience_company: str | None = None,
+    experience_job_order: str | None = None,
 ) -> tuple[HighlightBullet, ...]:
     """Collect exact-ID rendered bullets and reject ambiguous identities."""
 
@@ -285,6 +304,8 @@ def collect_highlight_bullets(
     jobs = experience.get("jobs") if type(experience) is dict else None
     if type(jobs) is not list:
         raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
+    company_filter = _optional_highlight_filter(experience_company)
+    order_filter = _optional_highlight_filter(experience_job_order)
     results: list[HighlightBullet] = []
     seen_jobs: set[str] = set()
     seen_targets: set[str] = set()
@@ -300,6 +321,15 @@ def collect_highlight_bullets(
         if job_order in seen_jobs:
             raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
         seen_jobs.add(job_order)
+        line_1 = job.get("line_1")
+        company = line_1.get("company_name_text") if type(line_1) is dict else ""
+        if company_filter is not None and (
+            type(company) is not str
+            or company_filter.casefold() not in company.casefold()
+        ):
+            continue
+        if order_filter is not None and order_filter != job_order:
+            continue
         bullets = job.get("bullet_points")
         if type(bullets) is not list:
             continue
@@ -354,6 +384,7 @@ def build_resume_highlight_prompt(
     snapshot: ApplicationWorkflowSnapshot,
     target_variant: ResumeVariantRecord,
     bullets: tuple[HighlightBullet, ...],
+    max_strong_spans_per_bullet: int = DEFAULT_MAX_STRONG_SPANS_PER_BULLET,
 ) -> str:
     """Build one bounded exact-wrapper request."""
 
@@ -367,6 +398,8 @@ def build_resume_highlight_prompt(
         or type(bullets) is not tuple
         or not bullets
         or len(bullets) > MAX_HIGHLIGHT_BULLETS
+        or type(max_strong_spans_per_bullet) is not int
+        or not 1 <= max_strong_spans_per_bullet <= DEFAULT_MAX_STRONG_SPANS_PER_BULLET
     ):
         raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
     if (
@@ -424,7 +457,8 @@ def build_resume_highlight_prompt(
         "Return only one strict JSON object. Return exactly one update for every "
         "input target and no extras. Preserve every input code point. The only "
         "permitted change is insertion of literal lowercase <strong> and </strong> "
-        "pairs. Use one to three balanced, nonnested spans per bullet. Do not use "
+        f"pairs. Use one to {max_strong_spans_per_bullet} balanced, nonnested "
+        "spans per bullet. Do not use "
         "attributes, other tags, comments, entities to alter bytes, controls, or "
         "Unicode tag lookalikes. A span must be nonempty, contain an alphanumeric "
         "character, and must not cover the whole bullet. Schema: "
@@ -436,6 +470,17 @@ def build_resume_highlight_prompt(
     if len(prompt) > MAX_HIGHLIGHT_PROMPT_CHARS:
         raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
     return prompt
+
+
+def _optional_highlight_filter(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
+    selected = value.strip()
+    if not selected or len(selected) > 1_024 or _has_forbidden_control(selected):
+        raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
+    return selected
 
 
 def parse_highlight_response(response_text: str) -> HighlightResponse:
@@ -490,6 +535,8 @@ def apply_highlight_response(
     response: HighlightResponse | str,
     *,
     max_strong_spans_per_bullet: int = DEFAULT_MAX_STRONG_SPANS_PER_BULLET,
+    experience_company: str | None = None,
+    experience_job_order: str | None = None,
 ) -> tuple[dict[str, Any], HighlightStats]:
     """Validate the complete response, then apply all exact wrapper insertions."""
 
@@ -501,7 +548,11 @@ def apply_highlight_response(
         raise ResumeHighlightError(_HIGHLIGHT_INPUT_ERROR)
     parsed = parse_highlight_response(response) if type(response) is str else response
     _validate_highlight_response_object(parsed)
-    bullets = collect_highlight_bullets(application_resume)
+    bullets = collect_highlight_bullets(
+        application_resume,
+        experience_company=experience_company,
+        experience_job_order=experience_job_order,
+    )
     update_by_id = {update.target_id: update for update in parsed.updates}
     if len(update_by_id) != len(parsed.updates):
         raise ResumeHighlightError(_HIGHLIGHT_RESPONSE_ERROR)

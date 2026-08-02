@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,12 +18,13 @@ from dotenv.parser import parse_stream
 _CANONICAL_PREFIX = "CAREER_AGENT_WORKBENCH_"
 _COMPATIBILITY_PREFIX = "LINKEDIN_CAREER_MCP_"
 _ENV_FILE_KEY = f"{_CANONICAL_PREFIX}ENV_FILE"
+_PRIVATE_ENV_FILE_KEY = f"{_CANONICAL_PREFIX}PRIVATE_ENV_FILE"
 _MISSING = object()
 
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0 Safari/537.36 career-agent-workbench/1.0.0"
+    "Chrome/125.0 Safari/537.36 career-agent-workbench/1.1.0"
 )
 
 
@@ -61,6 +63,7 @@ class WorkspaceMember(StrEnum):
     DATABASE = "database"
     BLACKLIST = "blacklist"
     TMP_DIR = "tmp_dir"
+    DOWNLOAD_DIR = "download_dir"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +78,7 @@ class RuntimeOverrides:
     database: str | os.PathLike[str] | None = None
     blacklist: str | os.PathLike[str] | None = None
     tmp_dir: str | os.PathLike[str] | None = None
+    download_dir: str | os.PathLike[str] | None = None
     user_agent: str | None = None
     timeout_seconds: float | str | None = None
     max_results: int | str | None = None
@@ -87,6 +91,15 @@ class RuntimeOverrides:
     llm_api_key: str | None = None
     llm_api_timeout_seconds: float | str | None = None
     llm_provider: str | None = None
+    jod_model: str | None = None
+    core_skill_model: str | None = None
+    second_pass_model: str | None = None
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
+    manual_pass_codex_model: str | None = None
+    manual_pass_codex_reasoning_effort: str | None = None
+    highlight_codex_model: str | None = None
+    highlight_codex_reasoning_effort: str | None = None
 
     def __repr__(self) -> str:
         configured = (
@@ -109,6 +122,7 @@ class WorkspacePaths:
     database: Path | None = None
     blacklist: Path | None = None
     tmp_dir: Path | None = None
+    download_dir: Path | None = None
 
     def __repr__(self) -> str:
         configured = (
@@ -153,6 +167,15 @@ class Settings:
     llm_api_key: str = ""
     llm_api_timeout_seconds: float = 360.0
     llm_provider: str = "api"
+    jod_model: str = "z-ai/glm-5.2"
+    core_skill_model: str = "z-ai/glm-5.2"
+    second_pass_model: str = "z-ai/glm-5.2"
+    codex_model: str = ""
+    codex_reasoning_effort: str = ""
+    manual_pass_codex_model: str = ""
+    manual_pass_codex_reasoning_effort: str = ""
+    highlight_codex_model: str = "gpt-5.6-sol"
+    highlight_codex_reasoning_effort: str = "high"
 
     def __repr__(self) -> str:
         return "Settings(configured=True)"
@@ -165,13 +188,15 @@ class RuntimeConfig:
     paths: WorkspacePaths
     settings: Settings
     env_file: Path | None
+    private_env_file: Path | None = None
 
     def __repr__(self) -> str:
         return (
             "RuntimeConfig("
             f"paths_configured={any(getattr(self.paths, field) is not None for field in self.paths.__dataclass_fields__)}, "
             "settings_configured=True, "
-            f"env_file_configured={self.env_file is not None})"
+            f"env_file_configured={self.env_file is not None}, "
+            f"private_env_file_configured={self.private_env_file is not None})"
         )
 
 
@@ -191,6 +216,7 @@ _WORKSPACE_SPECS = (
     ),
     ("blacklist", "BLACKLIST", (".blacklist",)),
     ("tmp_dir", "TMP_DIR", ("tmp",)),
+    ("download_dir", "DOWNLOAD_DIR", ("downloads",)),
 )
 
 _STRING_SETTING_SPECS = (
@@ -201,6 +227,34 @@ _STRING_SETTING_SPECS = (
     ("llm_api_model", "LLM_API_MODEL"),
     ("llm_planner_api_model", "LLM_PLANNER_API_MODEL"),
     ("llm_api_key", "LLM_API_KEY"),
+    ("jod_model", "JOD_MODEL"),
+    ("core_skill_model", "CORE_SKILL_MODEL"),
+    ("second_pass_model", "SECOND_PASS_MODEL"),
+    ("codex_model", "CODEX_MODEL"),
+    ("codex_reasoning_effort", "CODEX_REASONING_EFFORT"),
+)
+
+_WORKFLOW_SETTING_SPECS = (
+    (
+        "manual_pass_codex_model",
+        "MANUAL_PASS_CODEX_MODEL",
+        "CODEX_MODEL",
+    ),
+    (
+        "manual_pass_codex_reasoning_effort",
+        "MANUAL_PASS_CODEX_REASONING_EFFORT",
+        "CODEX_REASONING_EFFORT",
+    ),
+    (
+        "highlight_codex_model",
+        "HIGHLIGHT_CODEX_MODEL",
+        "CODEX_MODEL",
+    ),
+    (
+        "highlight_codex_reasoning_effort",
+        "HIGHLIGHT_CODEX_REASONING_EFFORT",
+        "CODEX_REASONING_EFFORT",
+    ),
 )
 
 _FLOAT_SETTING_SPECS = (
@@ -225,24 +279,46 @@ def load_runtime_config(
     env_file = (
         _select_env_file(process_values, invocation_cwd) if discover_dotenv else None
     )
-    dotenv_data = _read_env_file(env_file) if env_file is not None else {}
+    bootstrap_data = _read_bootstrap_env_file(env_file) if env_file is not None else {}
 
+    bootstrap_root = _resolve_workspace_root(
+        None,
+        process_values,
+        bootstrap_data,
+        env_file,
+        invocation_cwd,
+    )
     root = _resolve_workspace_root(
         explicit.workspace,
         process_values,
-        dotenv_data,
+        bootstrap_data,
         env_file,
         invocation_cwd,
+    )
+    private_env_file = _select_private_env_file(
+        process_values,
+        bootstrap_data,
+        env_file,
+        invocation_cwd,
+        bootstrap_root if bootstrap_root is not None else root,
+    )
+    private_data = (
+        _read_env_file(private_env_file) if private_env_file is not None else {}
     )
     paths = _resolve_workspace_paths(
         explicit,
         process_values,
-        dotenv_data,
+        private_data,
         root,
         invocation_cwd,
     )
-    settings = _resolve_settings(explicit, process_values, dotenv_data)
-    return RuntimeConfig(paths=paths, settings=settings, env_file=env_file)
+    settings = _resolve_settings(explicit, process_values, private_data)
+    return RuntimeConfig(
+        paths=paths,
+        settings=settings,
+        env_file=env_file,
+        private_env_file=private_env_file,
+    )
 
 
 def load_settings(
@@ -325,6 +401,88 @@ def _read_env_file(env_file: Path) -> dict[str, str | None]:
         raise
     except Exception:  # noqa: BLE001 - sanitize library and file failures
         raise EnvironmentFileError("Selected environment file is not usable.") from None
+
+
+def _read_bootstrap_env_file(env_file: Path) -> dict[str, str | None]:
+    values = _read_env_file(env_file)
+    allowed = {
+        f"{_CANONICAL_PREFIX}WORKSPACE",
+        f"{_COMPATIBILITY_PREFIX}WORKSPACE",
+        _PRIVATE_ENV_FILE_KEY,
+    }
+    if any(key not in allowed for key in values):
+        raise EnvironmentFileError("Selected environment file is not usable.")
+    return values
+
+
+def _select_private_env_file(
+    process_values: Mapping[str, Any],
+    bootstrap_data: Mapping[str, Any],
+    bootstrap_file: Path | None,
+    cwd: Path,
+    root: Path | None,
+) -> Path | None:
+    raw_selector: Any = _MISSING
+    for values in (process_values, bootstrap_data):
+        if _PRIVATE_ENV_FILE_KEY in values:
+            raw_selector = values[_PRIVATE_ENV_FILE_KEY]
+            break
+    if raw_selector is _MISSING:
+        return None
+    if _is_blank(raw_selector) or root is None:
+        raise EnvironmentFileError("Private environment file selector is invalid.")
+    try:
+        selector = _coerce_path(raw_selector, "private_env_file")
+        base = bootstrap_file.parent if bootstrap_file is not None else cwd
+        candidate = selector if selector.is_absolute() else base / selector
+    except InvalidConfigurationError:
+        raise EnvironmentFileError(
+            "Private environment file selector is invalid."
+        ) from None
+    if _has_symlink_component(candidate):
+        raise EnvironmentFileError("Private environment file is not usable.")
+    try:
+        selected = _normalize_path(candidate, "private_env_file")
+    except InvalidConfigurationError:
+        raise EnvironmentFileError(
+            "Private environment file selector is invalid."
+        ) from None
+    public_root = _editable_source_root()
+    if (
+        not _is_within(selected, root)
+        or (public_root is not None and _is_within(selected, public_root))
+        or not _is_secure_private_env_file(selected)
+    ):
+        raise EnvironmentFileError("Private environment file is not usable.")
+    return selected
+
+
+def _is_secure_private_env_file(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        return False
+    if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600:
+        return False
+    return True
+
+
+def _has_symlink_component(path: Path) -> bool:
+    try:
+        absolute = path if path.is_absolute() else Path.cwd() / path
+        current = Path(absolute.anchor)
+        for part in absolute.parts[1:]:
+            current /= part
+            try:
+                if current.is_symlink():
+                    return True
+            except OSError:
+                return True
+        return False
+    except (OSError, RuntimeError, ValueError):
+        return True
 
 
 def _resolve_workspace_root(
@@ -418,6 +576,21 @@ def _resolve_settings(
         else:
             raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
 
+    for field, workflow_suffix, shared_suffix in _WORKFLOW_SETTING_SPECS:
+        value, _ = _select_workflow_value(
+            getattr(explicit, field),
+            workflow_suffix,
+            shared_suffix,
+            process_values,
+            dotenv_data,
+        )
+        if value is _MISSING or _is_blank(value):
+            resolved[field] = getattr(defaults, field)
+        elif isinstance(value, str):
+            resolved[field] = value
+        else:
+            raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
+
     for field, suffix in _FLOAT_SETTING_SPECS:
         value, _ = _select_value(
             getattr(explicit, field),
@@ -474,6 +647,28 @@ def _select_value(
         key = f"{prefix}{suffix}"
         if key in values:
             return values[key], layer
+    return _MISSING, "default"
+
+
+def _select_workflow_value(
+    explicit_value: Any,
+    workflow_suffix: str,
+    shared_suffix: str,
+    process_values: Mapping[str, Any],
+    dotenv_data: Mapping[str, Any],
+) -> tuple[Any, str]:
+    if explicit_value is not None:
+        return explicit_value, "explicit"
+    for values, prefix, layer in (
+        (process_values, _CANONICAL_PREFIX, "process"),
+        (process_values, _COMPATIBILITY_PREFIX, "process"),
+        (dotenv_data, _CANONICAL_PREFIX, "dotenv"),
+        (dotenv_data, _COMPATIBILITY_PREFIX, "dotenv"),
+    ):
+        for suffix in (workflow_suffix, shared_suffix):
+            key = f"{prefix}{suffix}"
+            if key in values:
+                return values[key], layer
     return _MISSING, "default"
 
 

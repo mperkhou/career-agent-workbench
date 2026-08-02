@@ -29,6 +29,20 @@ P16_ASSETS = {
     "/docs/assets/tracker-add-seed-annotated.png",
     "/docs/assets/tracker-main-annotated.png",
 }
+CONSOLE_SCRIPTS = {
+    "career-agent-workbench": "career_agent_workbench.__main__:main",
+    "career-agent-workbench-audit-jods": (
+        "career_agent_workbench.jod_cleaner_audit:main"
+    ),
+    "career-agent-workbench-refine-resume": (
+        "career_agent_workbench.resume_refinement_cli:main"
+    ),
+    "career-agent-workbench-seed-jobs": (
+        "career_agent_workbench.workflows.matching:main"
+    ),
+    "career-agent-workbench-webapp": "career_agent_workbench.webapp:main",
+    "career-agent-workbench-mcp": "career_agent_workbench.server:main",
+}
 
 
 def _metadata() -> dict[str, object]:
@@ -72,3 +86,54 @@ def test_p16_readme_assets_and_local_links_are_aligned() -> None:
         resolved = (root / relative).resolve()
         resolved.relative_to(root)
         assert resolved.exists()
+
+
+def test_restored_modules_resources_tests_scripts_and_skills_are_in_sdist() -> None:
+    metadata = _metadata()
+    declared = metadata["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    included = set(declared)
+    assert len(included) == len(declared)
+
+    expected_paths = {
+        "/scripts/check_public_safety.py",
+        "/scripts/workbench_operator.py",
+        "/src/career_agent_workbench/cover_letter_rendering.py",
+        "/tests/test_cover_letter_rendering.py",
+        "/tests/test_guidance.py",
+        "/tests/test_makefile_workflows.py",
+        "/tests/test_mcp_integration.py",
+        "/tests/test_operator_helpers.py",
+        "/tests/test_public_safety.py",
+        "/tests/test_release_metadata.py",
+    }
+    for pattern in (
+        "src/career_agent_workbench/webapp*.py",
+        "src/career_agent_workbench/templates/webapp/*",
+        "src/career_agent_workbench/static/webapp/*",
+        "tests/test_webapp*.py",
+        "skills/**/*",
+    ):
+        expected_paths.update(
+            f"/{path.relative_to(ROOT).as_posix()}"
+            for path in ROOT.glob(pattern)
+            if path.is_file()
+        )
+    assert expected_paths <= included
+    for relative in included:
+        assert (ROOT / relative.removeprefix("/")).is_file()
+
+
+def test_six_console_scripts_and_operator_guidance_are_current() -> None:
+    metadata = _metadata()
+    assert metadata["project"]["scripts"] == CONSOLE_SCRIPTS
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    for marker in (
+        "make install",
+        "make start-website",
+        "make skill-link",
+        "career-agent-workbench-mcp",
+    ):
+        assert marker in readme
+    assert "CAREER_AGENT_WORKBENCH_PRIVATE_ENV_FILE" in env_example
+    assert "CAREER_AGENT_WORKBENCH_DOWNLOAD_DIR" in env_example

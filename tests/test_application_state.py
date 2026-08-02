@@ -30,6 +30,7 @@ from career_agent_workbench.application_state import (
     APPLICATION_STATUSES,
     MAX_ARO_YAML_BYTES,
     MAX_BULK_IDENTIFIERS,
+    MAX_CRITIQUE_TEXT_CHARS,
     MAX_JSON_CHARS,
     MAX_QUERY_RESULTS,
     ApplicationMetadata,
@@ -49,8 +50,11 @@ from career_agent_workbench.application_state import (
     ApplicationWorkflowSnapshot,
     ArtifactKind,
     AtsFields,
+    QueryOutcomeWrite,
     ResumeVariantWrite,
     artifact_filename,
+    workflow_revision_from_token,
+    workflow_revision_token,
 )
 from career_agent_workbench.config import WorkspacePaths
 from career_agent_workbench.providers.linkedin_public import (
@@ -771,13 +775,22 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
                 "PRAGMA index_list(application_resume_variants)"
             )
         }
+        query_indexes = {
+            row["name"]
+            for row in connection.execute("PRAGMA index_list(search_query_outcomes)")
+        }
         foreign_keys = connection.execute(
             "PRAGMA foreign_key_list(application_resume_variants)"
         ).fetchall()
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
 
     assert version == 1
-    assert tables == {"applications", "application_resume_variants"}
+    assert tables == {
+        "applications",
+        "application_resume_variants",
+        "search_query_outcomes",
+        "sqlite_sequence",
+    }
     assert application_indexes == {
         "applications_archive_order",
         "applications_unique_job_id",
@@ -788,6 +801,7 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
         "application_resume_variants_identity",
         "sqlite_autoindex_application_resume_variants_1",
     }
+    assert query_indexes == {"search_query_outcomes_keywords_idx"}
     assert len(foreign_keys) == 1
     foreign_key = foreign_keys[0]
     assert foreign_key["table"] == "applications"
@@ -795,6 +809,39 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
     assert foreign_key["to"] == "job_id"
     assert foreign_key["on_delete"] == "CASCADE"
     assert not database.with_name(f"{database.name}-journal").exists()
+
+
+def test_query_outcomes_round_trip_bounded_noncontent_history(tmp_path: Path) -> None:
+    store, _database = _store(tmp_path)
+    store.initialize()
+    outcome = QueryOutcomeWrite(
+        keywords="Synthetic Reliability",
+        location="Example Region",
+        date_posted="past_week",
+        workplace_type="remote",
+        experience_level="mid_senior",
+        job_type="full_time",
+        sort_by="recent",
+        limit=10,
+        page=1,
+        profile_match=0.75,
+        query_score=0.8,
+        results_returned=4,
+        fresh_jobs_accepted=2,
+        skipped_existing=1,
+    )
+
+    assert store.record_query_outcomes((outcome,)) == 1
+    history = store.load_query_outcomes()
+
+    assert len(history) == 1
+    assert history[0].keywords == "Synthetic Reliability"
+    assert history[0].fresh_jobs_accepted == 2
+    assert "Synthetic Reliability" not in repr(outcome)
+
+    for _ in range(3):
+        assert store.record_query_outcomes((outcome,) * 200) == 200
+    assert len(store.load_query_outcomes()) == 500
 
 
 def test_minimal_legacy_migration_preserves_bytes_and_is_repeatable(
@@ -1279,6 +1326,212 @@ def test_jod_aro_clo_application_artifacts_and_ats_round_trip(
         ats.updated_at,
     )
     assert result.ats.diagnostics["checks"] == (True, False)
+
+
+def test_jod_refresh_updates_ats_on_selected_variant_atomically(tmp_path: Path) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.select_resume_variant(JOB_ONE, "v1")
+    refreshed = AtsFields(
+        score=91,
+        parsing_score=92,
+        keyword_score=90,
+        semantic_score=89,
+        formatting_risk="low",
+        missing_terms="synthetic-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    projected = store.store_jod(
+        JOB_ONE,
+        source_text="Updated synthetic source.",
+        prompt_text="Updated synthetic prompt.",
+        ats=refreshed,
+    )
+
+    assert projected.selected_variant is not None
+    assert projected.selected_variant.ats.score == 91
+    assert projected.ats.score == 91
+    assert store.get_resume_variant(JOB_ONE, "v1").ats.score == 91
+    with sqlite3.connect(database) as connection:
+        application_score = connection.execute(
+            "SELECT ats_score FROM applications WHERE job_id = ?",
+            (JOB_ONE,),
+        ).fetchone()[0]
+    assert application_score == 91
+
+
+def test_store_ats_updates_only_application_fallback(tmp_path: Path) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_jod(
+        JOB_ONE,
+        source_text="Synthetic source JOD.",
+        prompt_text="Synthetic prompt JOD.",
+    )
+    store.store_aro(
+        JOB_ONE,
+        yaml_text=ARO_V1,
+        backup_yaml_text="profile:\n  summary: Synthetic backup\n",
+    )
+    store.store_clo(
+        JOB_ONE,
+        value={"letter": "Synthetic cover letter"},
+        pdf_content=b"synthetic-cover-pdf",
+    )
+    store.store_application_artifacts(
+        JOB_ONE,
+        resume_html="<main>Synthetic fallback</main>",
+        resume_pdf=b"synthetic-fallback-pdf",
+        ats=AtsFields(score=12, missing_terms="stale"),
+    )
+    store.update_application_status(
+        JOB_ONE,
+        applied_to="Yes",
+        date_applied="2035-02-04",
+        notes="Synthetic operator note",
+    )
+    store.archive([JOB_ONE])
+    before = store.get_application(JOB_ONE)
+    refreshed = AtsFields(
+        score=93,
+        parsing_score=94,
+        keyword_score=92,
+        semantic_score=91,
+        formatting_risk="low",
+        missing_terms="bounded-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    after = store.store_ats(JOB_ONE, refreshed)
+
+    assert after.selected_variant is None
+    assert after.ats.score == 93
+    assert after.ats.diagnostics["refreshed"] is True
+    assert after.updated_at != before.updated_at
+    assert (
+        replace(
+            after,
+            ats=before.ats,
+            updated_at=before.updated_at,
+        )
+        == before
+    )
+    with pytest.raises(ApplicationStateValidationError):
+        store.store_ats("", refreshed)
+    with pytest.raises(ApplicationStateValidationError):
+        store.store_ats(JOB_ONE, object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("manual_selection", "selected_key"),
+    ((False, "v2"), (True, "v1")),
+)
+def test_store_ats_updates_only_selected_variant_and_projection(
+    tmp_path: Path,
+    *,
+    manual_selection: bool,
+    selected_key: str,
+) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.store_jod(
+        JOB_ONE,
+        source_text="Synthetic source JOD.",
+        prompt_text="Synthetic prompt JOD.",
+    )
+    store.store_aro(
+        JOB_ONE,
+        yaml_text=ARO_V1,
+        backup_yaml_text="profile:\n  summary: Synthetic backup\n",
+    )
+    store.store_clo(
+        JOB_ONE,
+        value={"letter": "Synthetic cover letter"},
+        pdf_content=b"synthetic-cover-pdf",
+    )
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.upsert_resume_variant(JOB_ONE, _variant("v2", parent="v1"))
+    if manual_selection:
+        store.select_resume_variant(JOB_ONE, "v1")
+    store.update_application_status(
+        JOB_ONE,
+        applied_to="Yes",
+        date_applied="2035-02-04",
+        notes="Synthetic operator note",
+    )
+    store.archive([JOB_ONE])
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            UPDATE applications
+            SET aro_yaml = ?, application_resume_object = ?,
+                resume_html_content = ?, resume_content = ?
+            WHERE job_id = ?
+            """,
+            (
+                "profile:\n  summary: Stale synthetic projection\n",
+                "profile:\n  summary: Stale synthetic projection\n",
+                "<main>Stale synthetic projection</main>",
+                b"stale-synthetic-projection",
+                JOB_ONE,
+            ),
+        )
+    before = store.get_application(JOB_ONE)
+    variants_before = {
+        variant.variant_key: variant for variant in store.list_resume_variants(JOB_ONE)
+    }
+    refreshed = AtsFields(
+        score=93,
+        parsing_score=94,
+        keyword_score=92,
+        semantic_score=91,
+        formatting_risk="low",
+        missing_terms="bounded-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    after = store.store_ats(JOB_ONE, refreshed)
+    variants_after = {
+        variant.variant_key: variant for variant in store.list_resume_variants(JOB_ONE)
+    }
+
+    assert before.selected_resume_variant == selected_key
+    assert after.selected_resume_variant == selected_key
+    assert after.resume_variant_selection_mode == (
+        "manual" if manual_selection else "auto"
+    )
+    assert after.ats.score == 93
+    assert after.selected_variant is not None
+    assert after.selected_variant.ats.score == 93
+    assert after.application_resume == before.application_resume
+    assert after.resume_html == before.resume_html
+    assert after.resume_pdf == before.resume_pdf
+    assert (
+        replace(
+            after,
+            ats=before.ats,
+            selected_variant=before.selected_variant,
+            updated_at=before.updated_at,
+        )
+        == before
+    )
+    for key, variant_before in variants_before.items():
+        variant_after = variants_after[key]
+        if key != selected_key:
+            assert variant_after == variant_before
+            continue
+        assert variant_after.ats.score == 93
+        assert (
+            replace(
+                variant_after,
+                ats=variant_before.ats,
+                ats_diagnostics=variant_before.ats_diagnostics,
+                updated_at=variant_before.updated_at,
+            )
+            == variant_before
+        )
 
 
 def test_metadata_refresh_preserves_dedicated_state(tmp_path: Path) -> None:
@@ -1897,6 +2150,39 @@ def test_malformed_stored_variant_metadata_is_corruption(tmp_path: Path) -> None
         store.get_resume_variant(JOB_ONE, "v1")
 
     _assert_content_free(caught.value, forbidden=(JOB_ONE, "not-a-mapping"))
+
+
+def test_large_bounded_critique_text_round_trips_without_relaxing_cap(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    bounded_prompt = "p" * 700_000
+    bounded_response = "r" * MAX_CRITIQUE_TEXT_CHARS
+
+    stored = store.upsert_resume_variant(
+        JOB_ONE,
+        replace(
+            _variant("v1"),
+            critique_prompt=bounded_prompt,
+            critique_response=bounded_response,
+        ),
+    )
+
+    assert stored.critique_prompt == bounded_prompt
+    assert stored.critique_response == bounded_response
+    assert store.get_workflow_snapshot(JOB_ONE).variants[0] == stored
+
+    with pytest.raises(ApplicationStateValidationError) as caught:
+        store.upsert_resume_variant(
+            JOB_ONE,
+            replace(
+                _variant("v1"),
+                critique_prompt="x" * (MAX_CRITIQUE_TEXT_CHARS + 1),
+            ),
+        )
+
+    _assert_content_free(caught.value, forbidden=(JOB_ONE, "x" * 20))
+    assert store.get_resume_variant(JOB_ONE, "v1") == stored
 
 
 def test_strict_scope_variant_key_selection_mode_and_limits_reject_atomically(
@@ -2671,6 +2957,8 @@ def test_workflow_snapshot_is_coherent_canonical_immutable_and_content_hidden(
     assert snapshot.variants == (v1, v2)
     assert type(snapshot.variants) is tuple
     assert type(snapshot.revision) is ApplicationWorkflowRevision
+    assert type(snapshot.edit_revision) is ApplicationWorkflowRevision
+    assert type(snapshot.active_resume_yaml) is str
     rendered = f"{snapshot!r}\n{snapshot.revision!r}\n{snapshot.revision!s}"
     for forbidden in (
         JOB_ONE,
@@ -2705,6 +2993,7 @@ def test_workflow_revision_excludes_human_state_and_includes_prompt_state(
     store.archive([JOB_ONE])
     human_only = store.get_workflow_snapshot(JOB_ONE)
     assert human_only.revision == initial.revision
+    assert human_only.edit_revision != initial.edit_revision
 
     store.store_jod(JOB_ONE, source_text="source-two", prompt_text="prompt-two")
     jod_changed = store.get_workflow_snapshot(JOB_ONE)
@@ -2722,6 +3011,157 @@ def test_workflow_revision_excludes_human_state_and_includes_prompt_state(
     )
     metadata_changed = store.get_workflow_snapshot(JOB_ONE)
     assert metadata_changed.revision != sibling_changed.revision
+
+
+def test_resume_edit_revision_token_and_active_variant_cas_are_targeted(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_jod(JOB_ONE, source_text="source", prompt_text="prompt")
+    v1 = store.upsert_resume_variant(JOB_ONE, _variant("v1", marker="original-v1"))
+    original_v2 = store.upsert_resume_variant(
+        JOB_ONE, _variant("v2", parent="v1", marker="original-v2")
+    )
+    store.select_resume_variant(JOB_ONE, "v2")
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    token = workflow_revision_token(snapshot.edit_revision)
+    assert len(token) == 64
+    assert workflow_revision_from_token(token) == snapshot.edit_revision
+    for rejected in (None, "", token.upper(), "0" * 63, "private-content"):
+        with pytest.raises(ApplicationStateValidationError):
+            workflow_revision_from_token(rejected)
+
+    saved = store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: Edited\nsummary: fictional edit\n",
+        resume_html="<p>edited</p>",
+        resume_pdf=b"pdf-edited",
+        ats=AtsFields(score=91, parsing_score=90),
+        expected_revision=workflow_revision_from_token(token),
+        backup_current=True,
+    )
+    assert saved.selected_resume_variant == "v2"
+    assert saved.resume_variant_selection_mode == "manual"
+    assert saved.application_resume == {
+        "name": "Edited",
+        "summary": "fictional edit",
+    }
+    assert saved.application_resume_backup == original_v2.application_resume
+    assert saved.application_resume_backup_target == "v2"
+    assert store.get_resume_variant(JOB_ONE, "v1") == v1
+    edited_v2 = store.get_resume_variant(JOB_ONE, "v2")
+    assert edited_v2.parent_variant_key == original_v2.parent_variant_key
+    assert edited_v2.variant_label == original_v2.variant_label
+    assert edited_v2.source == original_v2.source
+    assert edited_v2.evidence_packet == original_v2.evidence_packet
+    assert edited_v2.validation == original_v2.validation
+    assert edited_v2.resume_html == "<p>edited</p>"
+    assert edited_v2.resume_pdf == b"pdf-edited"
+    assert edited_v2.ats.score == 91
+
+
+def test_resume_edit_revert_is_reversible_and_sync_preserves_backup(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1", marker="first"))
+    initial = store.get_workflow_snapshot(JOB_ONE)
+    store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: Edited\nvalue: two\n",
+        resume_html="<p>two</p>",
+        resume_pdf=b"pdf-two",
+        ats=None,
+        expected_revision=initial.edit_revision,
+        backup_current=True,
+    )
+    edited = store.get_workflow_snapshot(JOB_ONE)
+    backup_before_sync = edited.application.application_resume_backup
+    assert backup_before_sync == initial.application.application_resume
+
+    store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text=edited.active_resume_yaml or "",
+        resume_html="<p>two-synced</p>",
+        resume_pdf=b"pdf-two-synced",
+        ats=None,
+        expected_revision=edited.edit_revision,
+        backup_current=False,
+    )
+    synced = store.get_workflow_snapshot(JOB_ONE)
+    assert synced.active_resume_yaml == edited.active_resume_yaml
+    assert synced.application.application_resume_backup == backup_before_sync
+    assert synced.application.application_resume_backup_target == "v1"
+
+    reverted = store.revert_active_resume_if_revision(
+        JOB_ONE,
+        resume_html="<p>one</p>",
+        resume_pdf=b"pdf-one",
+        ats=None,
+        expected_revision=synced.edit_revision,
+    )
+    assert reverted.application_resume == initial.application.application_resume
+    assert reverted.application_resume_backup == edited.application.application_resume
+    assert reverted.application_resume_backup_target == "v1"
+
+    reversible = store.get_workflow_snapshot(JOB_ONE)
+    restored = store.revert_active_resume_if_revision(
+        JOB_ONE,
+        resume_html="<p>two-again</p>",
+        resume_pdf=b"pdf-two-again",
+        ats=None,
+        expected_revision=reversible.edit_revision,
+    )
+    assert restored.application_resume == edited.application.application_resume
+    assert restored.application_resume_backup == initial.application.application_resume
+
+
+def test_resume_edit_rejects_selection_drift_without_partial_write(
+    tmp_path: Path,
+) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.upsert_resume_variant(JOB_ONE, _variant("v2", parent="v1"))
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    store.select_resume_variant(JOB_ONE, "v1")
+    before = _schema_snapshot(database)
+
+    with pytest.raises(ApplicationStateConflictError):
+        store.store_active_resume_if_revision(
+            JOB_ONE,
+            yaml_text="name: rejected\n",
+            resume_html="<p>rejected</p>",
+            resume_pdf=b"pdf-rejected",
+            ats=None,
+            expected_revision=snapshot.edit_revision,
+            backup_current=True,
+        )
+    assert _schema_snapshot(database) == before
+
+
+def test_resume_edit_updates_fallback_without_inventing_selection(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_aro(JOB_ONE, yaml_text="name: Before\n")
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    updated = store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: After\n",
+        resume_html="<p>after</p>",
+        resume_pdf=b"pdf-after",
+        ats=AtsFields(score=77),
+        expected_revision=snapshot.edit_revision,
+        backup_current=True,
+    )
+    assert updated.selected_resume_variant is None
+    assert updated.resume_variant_selection_mode == "auto"
+    assert updated.application_resume == {"name": "After"}
+    assert updated.application_resume_backup == {"name": "Before"}
+    assert updated.application_resume_backup_target == "fallback"
+    assert updated.resume_html == "<p>after</p>"
+    assert updated.resume_pdf == b"pdf-after"
+    assert updated.ats.score == 77
 
 
 def test_conditional_variant_write_allows_pin_status_note_and_archive_drift(

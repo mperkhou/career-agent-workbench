@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Resume editor</title>
+    <style>
+      body { margin: 2rem auto; width: min(1100px, calc(100% - 2rem)); font-family: system-ui, sans-serif; color: #172033; }
+      textarea { width: 100%; min-height: 42rem; box-sizing: border-box; font-family: ui-monospace, monospace; }
+      .actions { display: flex; gap: .65rem; flex-wrap: wrap; margin: 1rem 0; }
+      button { padding: .55rem .8rem; }
+    </style>
+  </head>
+  <body>
+    <nav><a href="{{ view.index_url }}">Back to tracker</a></nav>
+    <h1>Resume editor</h1>
+    <p>Target: <strong>{{ target }}</strong> · Revision: {{ revision[:12] }}…</p>
+    {% if result %}<p role="status">Resume {{ result }}.</p>{% endif %}
+    <p>
+      <a href="/resume-html/{{ application.job_id }}">HTML preview</a> ·
+      <a href="/resumes/{{ application.job_id }}">PDF preview</a> ·
+      <a href="/resumes/{{ application.job_id }}/download">Download PDF</a>
+    </p>
+    <form method="post" action="/resumes/{{ application.job_id }}/copy-to-downloads">
+      {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <button type="submit">Copy PDF to configured downloads</button>
+    </form>
+    <form method="post" action="/resumes/{{ application.job_id }}/edit">
+      {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <input type="hidden" name="revision" value="{{ revision }}">
+      <label>Complete resume YAML<textarea name="yaml_text" maxlength="2000000" required>{{ yaml_text }}</textarea></label>
+      <button type="submit">Save and render</button>
+    </form>
+    <div class="actions">
+      <form method="post" action="/resumes/{{ application.job_id }}/edit/revert">
+        {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="revision" value="{{ revision }}">
+        <button type="submit" {% if not can_revert %}disabled{% endif %}>Revert one level</button>
+      </form>
+      <form method="post" action="/resumes/{{ application.job_id }}/edit/sync">
+        {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="revision" value="{{ revision }}">
+        <button type="submit">Sync current YAML to artifacts</button>
+      </form>
+    </div>
+  </body>
+</html>

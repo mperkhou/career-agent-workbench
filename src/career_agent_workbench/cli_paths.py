@@ -22,6 +22,7 @@ from career_agent_workbench.config import (
     RuntimeConfig,
     RuntimeOverrides,
     WorkspaceMember,
+    WorkspacePaths,
     load_runtime_config,
 )
 
@@ -47,6 +48,7 @@ _PATH_ARGUMENTS: Mapping[str, tuple[tuple[str, ...], str]] = {
         "Company blacklist override.",
     ),
     "tmp_dir": (("--tmp-dir",), "Temporary directory override."),
+    "download_dir": (("--download-dir",), "Private download directory override."),
 }
 
 
@@ -97,6 +99,7 @@ def runtime_overrides_from_namespace(
         "database",
         "blacklist",
         "tmp_dir",
+        "download_dir",
     ):
         value = getattr(args, field_name, None)
         if value is not None:
@@ -179,6 +182,54 @@ def reject_compatibility_path(value: Path | None) -> None:
 
     if value is not None:
         raise CliConfigurationError("Compatibility artifact output is disabled.")
+
+
+def resolve_private_workspace_path(
+    paths: WorkspacePaths,
+    value: Path,
+    *,
+    must_exist: bool = False,
+    directory: bool = False,
+) -> Path:
+    """Resolve one explicit input/output beneath the configured private root."""
+
+    try:
+        root = paths.require(WorkspaceMember.ROOT)
+        if type(value) is not type(Path()) or not root.is_absolute():
+            raise ValueError
+        candidate = value if value.is_absolute() else root / value
+        if root.is_symlink():
+            raise ValueError
+        lexical_root = Path(os.path.abspath(root))
+        lexical_candidate = Path(os.path.abspath(candidate))
+        relative = lexical_candidate.relative_to(lexical_root)
+        current = lexical_root
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError
+        selected_root = root.resolve(strict=True)
+        selected = candidate.resolve(strict=False)
+        selected.relative_to(selected_root)
+        if selected == selected_root:
+            raise ValueError
+        module_root = Path(__file__).resolve(strict=False).parents[2]
+        if (module_root / "pyproject.toml").is_file():
+            try:
+                selected.relative_to(module_root)
+            except ValueError:
+                pass
+            else:
+                raise ValueError
+        if must_exist and (not selected.is_file() or selected.is_symlink()):
+            raise ValueError
+        if directory and selected.exists() and not selected.is_dir():
+            raise ValueError
+        if not directory and not must_exist and selected.exists() and selected.is_dir():
+            raise ValueError
+        return selected
+    except Exception:  # noqa: BLE001 - sanitize caller-owned path details
+        raise CliConfigurationError("Private workspace path is invalid.") from None
 
 
 def build_codex_runner(
@@ -278,6 +329,7 @@ __all__ = [
     "build_codex_runner",
     "load_command_config",
     "reject_compatibility_path",
+    "resolve_private_workspace_path",
     "runtime_overrides_from_namespace",
     "seed_job_derived_paths",
     "with_model_request_policy",

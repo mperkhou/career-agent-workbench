@@ -7,72 +7,169 @@
     <style>
       :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
       body { margin: 0; background: #f4f6fa; color: #172033; }
-      main { width: min(1120px, calc(100% - 2rem)); margin: 2rem auto; }
+      main { width: min(1480px, calc(100% - 2rem)); margin: 2rem auto; }
       header, section { background: white; border: 1px solid #dce2ec; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
       h1, h2 { margin-top: 0; }
-      .scope, .actions { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
+      .toolbar, .actions, .counts { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
       a, button { color: #174ea6; }
-      .scope a[aria-current="page"] { font-weight: 700; }
       table { width: 100%; border-collapse: collapse; }
-      th, td { padding: .7rem; text-align: left; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
-      th { color: #566176; font-size: .85rem; }
+      th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
+      th { color: #566176; font-size: .8rem; }
       button { border: 0; border-radius: 8px; padding: .65rem .9rem; background: #174ea6; color: white; font-weight: 700; }
-      select { padding: .55rem; max-width: 24rem; }
+      button.danger { background: #a61b1b; }
+      input, select, textarea { border: 1px solid #c6cedb; border-radius: 7px; padding: .5rem; }
+      textarea { min-height: 3rem; resize: vertical; }
       .muted { color: #687386; }
       .status-list { display: grid; gap: .5rem; padding: 0; list-style: none; }
       .status-list li { padding: .7rem; border-radius: 8px; background: #f6f8fb; }
-      @media (max-width: 760px) { table { display: block; overflow-x: auto; } }
+      .application-update { display: grid; gap: .35rem; min-width: 18rem; }
+      .nowrap { white-space: nowrap; }
+      @media (max-width: 900px) { table { display: block; overflow-x: auto; } }
     </style>
   </head>
-  <body>
+  <body data-refresh-url="{{ view.index_url }}">
     <main>
       <header>
         <h1>Career Agent Workbench</h1>
         <p class="muted">Local tracker review and explicitly selected workflow actions.</p>
-        <nav class="scope" aria-label="Application scope">
-          {% for value in ("active", "archived", "all") %}
-            <a href="/?scope={{ value }}" {% if scope == value %}aria-current="page"{% endif %}>{{ value|title }}</a>
-          {% endfor %}
-        </nav>
+        <div class="counts">
+          <span>Shown: {{ counts.shown }}</span>
+          <span>Pending: {{ counts.pending }}</span>
+          <span>Applied: {{ counts.applied }}</span>
+          <span>Archived: {{ counts.archived }}</span>
+        </div>
       </header>
 
-      <form action="/actions/run" method="post">
-        <section>
-          <h2>Applications</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Select</th><th>Job</th><th>Company</th><th>Title</th>
-                <th>Source</th><th>Status</th><th>Resume</th><th>ATS</th><th>Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for application in applications %}
-                <tr>
-                  <td><input type="checkbox" name="job_id" value="{{ application.job_id }}" aria-label="Select {{ application.job_id }}"></td>
-                  <td>{{ application.job_id }}</td>
-                  <td>{{ application.company }}</td>
-                  <td><a href="{{ application.job_url }}">{{ application.job_title }}</a></td>
-                  <td>{{ application.source or "—" }}</td>
-                  <td>{{ application.applied_to }}</td>
-                  <td>{{ application.selected_resume_variant or "—" }}</td>
-                  <td>{{ application.ats.score if application.ats.score is not none else "—" }}</td>
-                  <td>{{ application.updated_at }}</td>
-                </tr>
-              {% else %}
-                <tr><td colspan="9" class="muted">No applications in this scope.</td></tr>
+      <section>
+        <form class="toolbar" method="get" action="/" aria-label="Tracker filters">
+          <label>Search <input type="search" name="q" maxlength="256" value="{{ view.q }}"></label>
+          <label>Status
+            <select name="status">
+              {% for value in tracker_statuses %}
+                <option value="{{ value }}" {% if value == view.status %}selected{% endif %}>{{ value }}</option>
               {% endfor %}
-            </tbody>
-          </table>
-        </section>
+            </select>
+          </label>
+          <label>Scope
+            <select name="scope">
+              {% for value in ("active", "archived", "all") %}
+                <option value="{{ value }}" {% if value == view.scope %}selected{% endif %}>{{ value|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Sort
+            <select name="sort">
+              {% for value in tracker_sorts %}
+                <option value="{{ value }}" {% if value == view.sort %}selected{% endif %}>{{ value|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Direction
+            <select name="direction">
+              {% for value in tracker_directions %}
+                <option value="{{ value }}" {% if value == view.direction %}selected{% endif %}>{{ value|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit">Apply view</button>
+          <a href="{{ view.add_url }}">Add / Seed</a>
+        </form>
+      </section>
 
+      <section>
+        <h2>Applications</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Select</th><th>Job</th><th>Company / title</th><th>Source</th>
+              <th>Dates / experience</th><th>Application state</th><th>Resume / ATS</th>
+              <th>CLO / archive</th><th>Update status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for application in applications %}
+              <tr>
+                <td><input form="bulk-actions-form" type="checkbox" name="job_id" value="{{ application.job_id }}" aria-label="Select {{ application.job_id }}"></td>
+                <td class="nowrap">{{ application.job_id }}</td>
+                <td>
+                  <strong>{{ application.company }}</strong><br>
+                  <a href="{{ application.job_url }}" target="_blank" rel="noopener noreferrer">{{ application.job_title }}</a>
+                </td>
+                <td>{{ application.source or "—" }}</td>
+                <td>
+                  Matched: {{ application.date_matched or "—" }}<br>
+                  Posted: {{ application.date_posted or "—" }}<br>
+                  Applied: {{ application.date_applied or "—" }}<br>
+                  Updated: {{ application.updated_at }}<br>
+                  Experience: {{ application.experience_level or "—" }}
+                </td>
+                <td>
+                  {{ application.applied_to }}<br>
+                  <span class="muted">{{ application.notes or "No notes" }}</span>
+                </td>
+                <td>
+                  Selection: {{ application.selected_resume_variant or "none" }}
+                  ({{ application.resume_variant_selection_mode }})<br>
+                  HTML: {{ "yes" if application.resume_html is not none else "no" }} ·
+                  PDF: {{ "yes" if application.resume_pdf is not none else "no" }}<br>
+                  ATS: {{ application.ats.score if application.ats.score is not none else "—" }}
+                  {% if application.ats.formatting_risk %}({{ application.ats.formatting_risk }}){% endif %}<br>
+                  <a href="/applications/{{ application.job_id }}/jod?{{ view.query_items|urlencode }}">JOD</a> ·
+                  <a href="/resumes/{{ application.job_id }}/variants?{{ view.query_items|urlencode }}">Variants</a> ·
+                  <a href="/resumes/{{ application.job_id }}/edit?{{ view.query_items|urlencode }}">Edit</a><br>
+                  <a href="/resume-html/{{ application.job_id }}">HTML</a> ·
+                  <a href="/resumes/{{ application.job_id }}">PDF</a> ·
+                  <a href="/resumes/{{ application.job_id }}/download">Download</a>
+                </td>
+                <td>
+                  CLO: {{ "yes" if application.cover_letter is not none or application.cover_letter_pdf is not none else "no" }}<br>
+                  <a href="/applications/{{ application.job_id }}/cover-letter?{{ view.query_items|urlencode }}">Edit</a> ·
+                  <a href="/cover-letters/{{ application.job_id }}">View</a> ·
+                  <a href="/cover-letters/{{ application.job_id }}/download">Download</a><br>
+                  Archived: {{ application.archived_at or "no" }}
+                </td>
+                <td>
+                  <form class="application-update" method="post" action="/applications/{{ application.job_id }}">
+                    {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+                    <select name="applied_to" aria-label="Status for {{ application.job_id }}">
+                      {% for value in tracker_statuses if value != "all" %}
+                        <option value="{{ value }}" {% if value == application.applied_to %}selected{% endif %}>{{ value }}</option>
+                      {% endfor %}
+                    </select>
+                    <input type="date" name="date_applied" value="{{ application.date_applied or '' }}" aria-label="Date applied for {{ application.job_id }}">
+                    <textarea name="notes" maxlength="100000" aria-label="Notes for {{ application.job_id }}">{{ application.notes }}</textarea>
+                    <button type="submit">Save</button>
+                  </form>
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="9" class="muted">No applications in this view.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <form id="bulk-actions-form" method="post" action="/actions/run" data-action-form="workflow">
+        {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         <section>
-          <h2>Run an action</h2>
+          <h2>Lifecycle and workflow actions</h2>
           <div class="actions">
+            <button type="submit" formaction="/applications/archive">Archive selected</button>
+            <button type="submit" formaction="/applications/unarchive">Restore selected</button>
+            <label>Type delete to confirm <input name="confirm_delete" autocomplete="off"></label>
+            <button class="danger" type="submit" formaction="/applications/delete">Delete selected</button>
             <label for="target">Workflow</label>
             <select id="target" name="target" required>
               {% for value, label in targets.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
             </select>
+            <label>Manual profile
+              <select name="manual_pass_profile">
+                <option value="economy">Economy</option>
+                <option value="regular" selected>Regular</option>
+                <option value="premium">Premium</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="highlight" value="1"> Highlight after valid workflow</label>
             <button type="submit">Run selected</button>
           </div>
         </section>
@@ -80,6 +177,8 @@
 
       <section id="action-status">
         <h2>Action status</h2>
+        <p id="web-feedback" class="muted" role="status">Ready.</p>
+        <p id="action-progress" class="muted"></p>
         <ul class="status-list">
           {% for action in actions %}
             <li><strong>{{ action.target }}</strong> — {{ action.status }} · {{ action.message }}</li>
@@ -90,5 +189,6 @@
         <a href="/actions/status">View status JSON</a>
       </section>
     </main>
+    <script src="/static/webapp/app.js" defer></script>
   </body>
 </html>

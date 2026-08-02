@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import career_agent_workbench.artifact_exports as artifact_exports
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,45 +131,6 @@ def test_render_script_explicit_output_does_not_require_temporary_state(
     monkeypatch.setattr(module, "render_resume_html", lambda *_args, **_kwargs: "ok")
     assert module.main(["--output", str(output)]) == 0
     assert output.read_text(encoding="utf-8") == "ok"
-
-
-@pytest.mark.parametrize(
-    ("name", "arguments"),
-    [
-        ("application_resume_generate_drafts.py", ["--artifact-dir", "disabled"]),
-        ("application_resume_highlight_drafts.py", ["--artifact-dir", "disabled"]),
-        (
-            "application_resume_manual_pass.py",
-            ["--job-id", "synthetic", "--artifact-dir", "disabled"],
-        ),
-        (
-            "application_resume_pass_one.py",
-            [
-                "--trimmed-jod",
-                "jod.txt",
-                "--core-skill-response",
-                "response.json",
-                "--output",
-                "resume.yml",
-                "--prompt-output",
-                "prompt.txt",
-            ],
-        ),
-    ],
-)
-def test_raw_model_artifact_compatibility_flags_fail_closed(
-    name: str,
-    arguments: list[str],
-) -> None:
-    module = _load_script(name)
-    with pytest.raises(SystemExit) as raised:
-        if name == "application_resume_generate_drafts.py":
-            import asyncio
-
-            asyncio.run(module.main_async(arguments))
-        else:
-            module.main(arguments)
-    assert raised.value.code == 2
 
 
 @pytest.mark.asyncio
@@ -364,9 +326,12 @@ def test_first_draft_import_uses_one_parsed_mapping_after_source_replacement(
     }
     source.write_text(yaml.safe_dump(original), encoding="utf-8")
     paths = WorkspacePaths(
+        root=tmp_path,
         database=tmp_path / "state.sqlite3",
         output_dir=tmp_path / "artifacts",
     )
+    template = tmp_path / "private-template.html"
+    template.write_text("synthetic template", encoding="utf-8")
     captured: dict[str, object] = {}
 
     class FakeStore:
@@ -398,7 +363,7 @@ def test_first_draft_import_uses_one_parsed_mapping_after_source_replacement(
 
     def fake_render(*, resume, template_path):
         captured["rendered_mapping"] = resume
-        assert template_path is None
+        assert template_path == template
         return "<html>fictional original</html>"
 
     score = SimpleNamespace(
@@ -426,10 +391,141 @@ def test_first_draft_import_uses_one_parsed_mapping_after_source_replacement(
     monkeypatch.setattr(module, "calculate_ats_diagnostics", lambda **_k: diagnostics)
     monkeypatch.setattr(module, "asdict", lambda _value: {"synthetic": True})
 
-    assert module.main(["--job-id", "fictional-job", "--input", str(source)]) == 0
+    assert (
+        module.main(
+            [
+                "--job-id",
+                "fictional-job",
+                "--input",
+                str(source),
+                "--template",
+                str(template),
+                "--output-yaml",
+                "exports/review.yml",
+                "--output-html",
+                "exports/review.html",
+                "--output-pdf",
+                "exports/review.pdf",
+            ]
+        )
+        == 0
+    )
     job_id, variant, revision = captured["write"]
     assert job_id == "fictional-job"
     assert revision == "fictional-revision"
     assert captured["rendered_mapping"] == original
     assert yaml.safe_load(variant.application_resume_yaml) == original
     assert yaml.safe_load(source.read_text(encoding="utf-8")) == replacement
+    assert yaml.safe_load((tmp_path / "exports/review.yml").read_text()) == original
+    assert (tmp_path / "exports/review.html").read_text() == (
+        "<html>fictional original</html>"
+    )
+    assert (tmp_path / "exports/review.pdf").read_bytes() == b"pdf"
+
+
+def test_pass_one_prompt_only_uses_stdout_or_explicit_private_output(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_pass_one.py")
+    workspace = tmp_path / "private-workspace"
+    workspace.mkdir()
+    master = workspace / "MASTER-RESUME.yml"
+    master.write_text("name: Fictional Candidate\n", encoding="utf-8")
+    jod = workspace / "trimmed-jod.txt"
+    jod.write_text("Build synthetic systems.", encoding="utf-8")
+    paths = WorkspacePaths(root=workspace, master_resume=master)
+    monkeypatch.setattr(
+        module,
+        "load_command_config",
+        lambda *_a, **_k: RuntimeConfig(
+            paths=paths,
+            settings=Settings(),
+            env_file=None,
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "initialize_application_resume_object",
+        lambda _path: {"synthetic": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "build_core_skills_jod_match_prompt",
+        lambda **_kwargs: "synthetic prompt only",
+    )
+
+    assert module.main(["--trimmed-jod", str(jod), "--prompt-only"]) == 0
+    assert capsys.readouterr().out == "synthetic prompt only\n"
+
+    assert (
+        module.main(
+            [
+                "--trimmed-jod",
+                str(jod),
+                "--prompt-only",
+                "--prompt-output",
+                "prompts/pass-one.txt",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == ""
+    assert (workspace / "prompts/pass-one.txt").read_text() == ("synthetic prompt only")
+
+
+def test_rendered_resume_export_writes_only_yaml_html_pdf_under_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "private-workspace"
+    workspace.mkdir()
+    template = workspace / "template.html"
+    template.write_text("synthetic", encoding="utf-8")
+    paths = WorkspacePaths(root=workspace)
+    captured: dict[str, object] = {}
+
+    def render(*, resume, template_path):
+        captured["resume"] = resume
+        captured["template"] = template_path
+        return "<html>rendered synthetic</html>"
+
+    monkeypatch.setattr(artifact_exports, "render_resume_html_from_mapping", render)
+    monkeypatch.setattr(
+        artifact_exports,
+        "render_resume_pdf_from_html",
+        lambda _html: b"synthetic-pdf",
+    )
+    result = artifact_exports.export_rendered_resume(
+        paths=paths,
+        output_dir=Path("rendered"),
+        job_id="fictional-job",
+        resume={"name": "Fictional Candidate"},
+        template_path=template,
+    )
+
+    assert result.file_count == 3
+    assert captured["template"] == template
+    assert {item.name for item in (workspace / "rendered").iterdir()} == {
+        "fictional-job.yml",
+        "fictional-job.html",
+        "fictional-job.pdf",
+    }
+
+
+def test_private_output_resolution_rejects_symlink_components(tmp_path: Path) -> None:
+    workspace = tmp_path / "private-workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(Exception) as caught:
+        artifact_exports.export_rendered_resume(
+            paths=WorkspacePaths(root=workspace),
+            output_dir=Path("linked/rendered"),
+            job_id="fictional-job",
+            resume={"name": "Fictional Candidate"},
+        )
+    assert str(outside) not in str(caught.value)

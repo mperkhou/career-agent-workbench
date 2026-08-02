@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Add applications · Career Agent Workbench</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #f4f6fa; color: #172033; }
+      main { width: min(920px, calc(100% - 2rem)); margin: 2rem auto; }
+      section { background: white; border: 1px solid #dce2ec; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+      form { display: grid; gap: .75rem; }
+      .row { display: flex; flex-wrap: wrap; gap: .75rem; }
+      input, select, textarea, button { border: 1px solid #c6cedb; border-radius: 7px; padding: .65rem; }
+      textarea { min-height: 8rem; resize: vertical; }
+      button { background: #174ea6; border: 0; color: white; font-weight: 700; }
+      a { color: #174ea6; }
+      .muted { color: #687386; }
+    </style>
+  </head>
+  <body data-refresh-url="{{ view.index_url }}">
+    <main>
+      <p><a href="{{ view.index_url }}">← Return to preserved tracker view</a></p>
+      <section>
+        <h1>Add / Seed applications</h1>
+        <p class="muted">Use public guest access only. Submitted URL lists are normalized, deduplicated, and bounded.</p>
+        <p id="web-feedback" class="muted" role="status">Ready.</p>
+        <p id="action-progress" class="muted"></p>
+      </section>
+
+      <section>
+        <h2>Seed and match public jobs</h2>
+        <form method="post" action="/applications/add/seed" data-background-form="seed">
+          {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+          <label>Location <input name="location" maxlength="256" value="United States" required></label>
+          <div class="row">
+            <label>Date posted
+              <select name="date_posted">
+                <option value="past_24_hours">Past 24 hours</option>
+                <option value="past_week" selected>Past week</option>
+                <option value="past_month">Past month</option>
+                <option value="any_time">Any time</option>
+              </select>
+            </label>
+            <label>Limit per query <input type="number" name="limit_per_query" min="1" max="100" value="10" required></label>
+            <label>Maximum queries <input type="number" name="max_queries" min="1" max="100" value="6" required></label>
+            <label>Maximum jobs <input type="number" name="max_jobs" min="1" max="50" value="10" required></label>
+          </div>
+          <button type="submit">Start seed action</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Add LinkedIn job URLs</h2>
+        <form method="post" action="/applications/add/linkedin" data-ingestion-form="linkedin">
+          {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+          <textarea name="linkedin_urls" maxlength="82000" placeholder="One or more public LinkedIn job URLs" required></textarea>
+          <button type="submit">Add LinkedIn jobs</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Add other public job URLs</h2>
+        <form method="post" action="/applications/add/other" data-ingestion-form="generic">
+          {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+          <textarea name="other_urls" maxlength="82000" placeholder="One or more public job URLs" required></textarea>
+          <button type="submit">Add public jobs</button>
+        </form>
+      </section>
+    </main>
+    <script src="/static/webapp/app.js" defer></script>
+  </body>
+</html>

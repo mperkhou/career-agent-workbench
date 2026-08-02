@@ -30,6 +30,7 @@ from career_agent_workbench.application_state import (
     APPLICATION_STATUSES,
     MAX_ARO_YAML_BYTES,
     MAX_BULK_IDENTIFIERS,
+    MAX_CRITIQUE_TEXT_CHARS,
     MAX_JSON_CHARS,
     MAX_QUERY_RESULTS,
     ApplicationMetadata,
@@ -2149,6 +2150,39 @@ def test_malformed_stored_variant_metadata_is_corruption(tmp_path: Path) -> None
         store.get_resume_variant(JOB_ONE, "v1")
 
     _assert_content_free(caught.value, forbidden=(JOB_ONE, "not-a-mapping"))
+
+
+def test_large_bounded_critique_text_round_trips_without_relaxing_cap(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    bounded_prompt = "p" * 700_000
+    bounded_response = "r" * MAX_CRITIQUE_TEXT_CHARS
+
+    stored = store.upsert_resume_variant(
+        JOB_ONE,
+        replace(
+            _variant("v1"),
+            critique_prompt=bounded_prompt,
+            critique_response=bounded_response,
+        ),
+    )
+
+    assert stored.critique_prompt == bounded_prompt
+    assert stored.critique_response == bounded_response
+    assert store.get_workflow_snapshot(JOB_ONE).variants[0] == stored
+
+    with pytest.raises(ApplicationStateValidationError) as caught:
+        store.upsert_resume_variant(
+            JOB_ONE,
+            replace(
+                _variant("v1"),
+                critique_prompt="x" * (MAX_CRITIQUE_TEXT_CHARS + 1),
+            ),
+        )
+
+    _assert_content_free(caught.value, forbidden=(JOB_ONE, "x" * 20))
+    assert store.get_resume_variant(JOB_ONE, "v1") == stored
 
 
 def test_strict_scope_variant_key_selection_mode_and_limits_reject_atomically(

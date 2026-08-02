@@ -45,6 +45,7 @@ MAX_JSON_DEPTH = 64
 MAX_JSON_NODES = 100_000
 MAX_NOTES_CHARS = 100_000
 MAX_METADATA_TEXT_CHARS = 500_000
+MAX_CRITIQUE_TEXT_CHARS = 1_000_000
 MAX_BULK_IDENTIFIERS = 500
 MAX_QUERY_RESULTS = 1_000
 MAX_QUERY_HISTORY_RESULTS = 500
@@ -3393,10 +3394,10 @@ def _variant_write(
         "evidence_packet_json": _optional_json_mapping(value.evidence_packet),
         "external_critique_json": _optional_json_mapping(value.external_critique),
         "critique_prompt": _optional_text(
-            value.critique_prompt, MAX_METADATA_TEXT_CHARS
+            value.critique_prompt, MAX_CRITIQUE_TEXT_CHARS
         ),
         "critique_response": _optional_text(
-            value.critique_response, MAX_METADATA_TEXT_CHARS
+            value.critique_response, MAX_CRITIQUE_TEXT_CHARS
         ),
         "critique_json": _optional_json_mapping(value.critique),
         "validation_json": _optional_json_mapping(value.validation),
@@ -3770,10 +3771,10 @@ def _variant_record(
         evidence_packet=_decode_optional_json(row["evidence_packet_json"]),
         external_critique=_decode_optional_json(row["external_critique_json"]),
         critique_prompt=_stored_optional_text(
-            row["critique_prompt"], MAX_METADATA_TEXT_CHARS
+            row["critique_prompt"], MAX_CRITIQUE_TEXT_CHARS
         ),
         critique_response=_stored_optional_text(
-            row["critique_response"], MAX_METADATA_TEXT_CHARS
+            row["critique_response"], MAX_CRITIQUE_TEXT_CHARS
         ),
         critique=_decode_optional_json(row["critique_json"]),
         validation=_decode_optional_json(row["validation_json"]),

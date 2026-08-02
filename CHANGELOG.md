@@ -1,6 +1,13 @@
 # Changelog
 
-## [1.1.0] - In progress
+## [1.2.0] - In progress
+
+### Added
+
+- Initialized the digest-bound operational-parity workflow for the nine
+  approved v1.2.0 capability gaps; implementation remains separately gated.
+
+## [1.1.0] - 2026-08-02
 
 ### Added
 

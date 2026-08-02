@@ -74,6 +74,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.MASTER_RESUME_TEXT,
                 WorkspaceMember.TMP_DIR,
             ),
+            setting_overrides={
+                "manual_pass_codex_model": args.codex_model,
+                "manual_pass_codex_reasoning_effort": (args.codex_reasoning_effort),
+            },
         )
         store = ApplicationStateStore(config.paths)
         runner = with_model_request_policy(
@@ -87,8 +91,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         model = resolve_manual_pass_config(
             profile=args.manual_pass_profile or DEFAULT_MANUAL_PASS_PROFILE,
-            workflow_model_override=args.codex_model,
-            workflow_reasoning_effort_override=args.codex_reasoning_effort,
+            workflow_model_override=(config.settings.manual_pass_codex_model or None),
+            workflow_reasoning_effort_override=(
+                config.settings.manual_pass_codex_reasoning_effort or None
+            ),
         ).to_model_config()
         job_ids = list(
             dict.fromkeys(value.strip() for value in args.job_ids if value.strip())

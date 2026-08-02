@@ -7,6 +7,9 @@
 - Added two-phase bootstrap/private dotenv loading for an external ops
   workspace, with deterministic precedence, exact private-file permissions,
   path containment, immutable loads, and content-hidden failures.
+- Restored workflow-specific model routing for JOD, core-skill, second-pass,
+  manual-pass, and highlighting commands while preserving the general provider
+  default and exact compatibility-variable precedence.
 
 ### Safety and governance
 

@@ -64,6 +64,26 @@ SETTING_CASES = (
     ("llm_api_key", "LLM_API_KEY", "fictional-token-marker", "fictional-token-marker"),
     ("llm_api_timeout_seconds", "LLM_API_TIMEOUT_SECONDS", "361.5", 361.5),
     ("llm_provider", "LLM_PROVIDER", "OlLaMa", "ollama"),
+    ("jod_model", "JOD_MODEL", "fictional/jod-model", "fictional/jod-model"),
+    (
+        "core_skill_model",
+        "CORE_SKILL_MODEL",
+        "fictional/core-model",
+        "fictional/core-model",
+    ),
+    (
+        "second_pass_model",
+        "SECOND_PASS_MODEL",
+        "fictional/second-model",
+        "fictional/second-model",
+    ),
+    ("codex_model", "CODEX_MODEL", "fictional-shared-model", "fictional-shared-model"),
+    (
+        "codex_reasoning_effort",
+        "CODEX_REASONING_EFFORT",
+        "fictional-shared-effort",
+        "fictional-shared-effort",
+    ),
 )
 
 WORKSPACE_CASES = (
@@ -234,6 +254,108 @@ def test_complete_precedence_order(
         RuntimeOverrides(user_agent=override),
     )
     assert loaded.settings.user_agent == expected
+
+
+def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> None:
+    settings = _load(tmp_path).settings
+
+    assert settings.llm_api_model == "deepseek/deepseek-chat"
+    assert settings.jod_model == "z-ai/glm-5.2"
+    assert settings.core_skill_model == "z-ai/glm-5.2"
+    assert settings.second_pass_model == "z-ai/glm-5.2"
+    assert settings.manual_pass_codex_model == ""
+    assert settings.manual_pass_codex_reasoning_effort == ""
+    assert settings.highlight_codex_model == "gpt-5.6-sol"
+    assert settings.highlight_codex_reasoning_effort == "high"
+
+
+@pytest.mark.parametrize(
+    ("field", "suffix", "shared_suffix", "default"),
+    (
+        (
+            "manual_pass_codex_model",
+            "MANUAL_PASS_CODEX_MODEL",
+            "CODEX_MODEL",
+            "",
+        ),
+        (
+            "manual_pass_codex_reasoning_effort",
+            "MANUAL_PASS_CODEX_REASONING_EFFORT",
+            "CODEX_REASONING_EFFORT",
+            "",
+        ),
+        (
+            "highlight_codex_model",
+            "HIGHLIGHT_CODEX_MODEL",
+            "CODEX_MODEL",
+            "gpt-5.6-sol",
+        ),
+        (
+            "highlight_codex_reasoning_effort",
+            "HIGHLIGHT_CODEX_REASONING_EFFORT",
+            "CODEX_REASONING_EFFORT",
+            "high",
+        ),
+    ),
+)
+def test_workflow_codex_precedence_and_shared_fallback(
+    tmp_path: Path,
+    field: str,
+    suffix: str,
+    shared_suffix: str,
+    default: str,
+) -> None:
+    _write_private_env(
+        tmp_path,
+        (
+            f"{COMPATIBILITY}{shared_suffix}=private-compatibility-shared",
+            f"{COMPATIBILITY}{suffix}=private-compatibility-workflow",
+            f"{CANONICAL}{shared_suffix}=private-canonical-shared",
+            f"{CANONICAL}{suffix}=private-canonical-workflow",
+        ),
+    )
+    process = {
+        f"{COMPATIBILITY}{suffix}": "process-compatibility-workflow",
+        f"{CANONICAL}{shared_suffix}": "process-canonical-shared",
+        f"{CANONICAL}{suffix}": "process-canonical-workflow",
+    }
+
+    assert getattr(_load(tmp_path).settings, field) == "private-canonical-workflow"
+    assert (
+        getattr(
+            _load(
+                tmp_path,
+                {f"{COMPATIBILITY}{shared_suffix}": "process-compatibility-shared"},
+            ).settings,
+            field,
+        )
+        == "process-compatibility-shared"
+    )
+    assert (
+        getattr(_load(tmp_path, process).settings, field)
+        == "process-canonical-workflow"
+    )
+    assert (
+        getattr(
+            _load(
+                tmp_path,
+                process,
+                RuntimeOverrides(**{field: "explicit-workflow"}),
+            ).settings,
+            field,
+        )
+        == "explicit-workflow"
+    )
+    assert (
+        getattr(
+            _load(
+                tmp_path,
+                {f"{CANONICAL}{suffix}": ""},
+            ).settings,
+            field,
+        )
+        == default
+    )
 
 
 def test_blank_canonical_values_block_lower_layers_and_reset(tmp_path: Path) -> None:

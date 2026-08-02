@@ -126,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.MASTER_RESUME_TEXT,
             ),
             setting_overrides={
-                "llm_api_model": args.api_model,
+                "second_pass_model": args.api_model,
                 "llm_api_timeout_seconds": args.api_timeout_seconds,
             },
         )
@@ -139,12 +139,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         job_ids = list(dict.fromkeys(selected))
         if not job_ids:
             parser.error("Pass --job-id or --all-active.")
+        model = config.settings.second_pass_model
         runner = _ConfiguredLlmRunner(
             config.settings,
-            api_model=args.api_model,
+            api_model=model,
             retries=args.api_retries,
         )
-        model = args.api_model or config.settings.llm_api_model
         results = [
             refine_resume_for_job(
                 store=store,

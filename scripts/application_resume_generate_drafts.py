@@ -254,7 +254,8 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.MASTER_RESUME,
             ),
             setting_overrides={
-                "llm_api_model": args.api_model,
+                "core_skill_model": args.api_model,
+                "jod_model": args.jod_model,
                 "llm_api_timeout_seconds": args.llm_timeout_seconds,
             },
         )
@@ -282,8 +283,8 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         break
             print(json.dumps({"candidates": len(eligible), "dry_run": True}))
             return 0
-        core_model = args.api_model or config.settings.llm_api_model
-        jod_model = args.jod_model or config.settings.llm_api_model
+        core_model = config.settings.core_skill_model
+        jod_model = config.settings.jod_model
         core_client = build_llm_client(config.settings, api_model=core_model)
         jod_client = build_llm_client(config.settings, api_model=jod_model)
         processed = 0

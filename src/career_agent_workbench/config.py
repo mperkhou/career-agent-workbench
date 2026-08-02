@@ -89,6 +89,15 @@ class RuntimeOverrides:
     llm_api_key: str | None = None
     llm_api_timeout_seconds: float | str | None = None
     llm_provider: str | None = None
+    jod_model: str | None = None
+    core_skill_model: str | None = None
+    second_pass_model: str | None = None
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
+    manual_pass_codex_model: str | None = None
+    manual_pass_codex_reasoning_effort: str | None = None
+    highlight_codex_model: str | None = None
+    highlight_codex_reasoning_effort: str | None = None
 
     def __repr__(self) -> str:
         configured = (
@@ -155,6 +164,15 @@ class Settings:
     llm_api_key: str = ""
     llm_api_timeout_seconds: float = 360.0
     llm_provider: str = "api"
+    jod_model: str = "z-ai/glm-5.2"
+    core_skill_model: str = "z-ai/glm-5.2"
+    second_pass_model: str = "z-ai/glm-5.2"
+    codex_model: str = ""
+    codex_reasoning_effort: str = ""
+    manual_pass_codex_model: str = ""
+    manual_pass_codex_reasoning_effort: str = ""
+    highlight_codex_model: str = "gpt-5.6-sol"
+    highlight_codex_reasoning_effort: str = "high"
 
     def __repr__(self) -> str:
         return "Settings(configured=True)"
@@ -205,6 +223,34 @@ _STRING_SETTING_SPECS = (
     ("llm_api_model", "LLM_API_MODEL"),
     ("llm_planner_api_model", "LLM_PLANNER_API_MODEL"),
     ("llm_api_key", "LLM_API_KEY"),
+    ("jod_model", "JOD_MODEL"),
+    ("core_skill_model", "CORE_SKILL_MODEL"),
+    ("second_pass_model", "SECOND_PASS_MODEL"),
+    ("codex_model", "CODEX_MODEL"),
+    ("codex_reasoning_effort", "CODEX_REASONING_EFFORT"),
+)
+
+_WORKFLOW_SETTING_SPECS = (
+    (
+        "manual_pass_codex_model",
+        "MANUAL_PASS_CODEX_MODEL",
+        "CODEX_MODEL",
+    ),
+    (
+        "manual_pass_codex_reasoning_effort",
+        "MANUAL_PASS_CODEX_REASONING_EFFORT",
+        "CODEX_REASONING_EFFORT",
+    ),
+    (
+        "highlight_codex_model",
+        "HIGHLIGHT_CODEX_MODEL",
+        "CODEX_MODEL",
+    ),
+    (
+        "highlight_codex_reasoning_effort",
+        "HIGHLIGHT_CODEX_REASONING_EFFORT",
+        "CODEX_REASONING_EFFORT",
+    ),
 )
 
 _FLOAT_SETTING_SPECS = (
@@ -526,6 +572,21 @@ def _resolve_settings(
         else:
             raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
 
+    for field, workflow_suffix, shared_suffix in _WORKFLOW_SETTING_SPECS:
+        value, _ = _select_workflow_value(
+            getattr(explicit, field),
+            workflow_suffix,
+            shared_suffix,
+            process_values,
+            dotenv_data,
+        )
+        if value is _MISSING or _is_blank(value):
+            resolved[field] = getattr(defaults, field)
+        elif isinstance(value, str):
+            resolved[field] = value
+        else:
+            raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
+
     for field, suffix in _FLOAT_SETTING_SPECS:
         value, _ = _select_value(
             getattr(explicit, field),
@@ -582,6 +643,28 @@ def _select_value(
         key = f"{prefix}{suffix}"
         if key in values:
             return values[key], layer
+    return _MISSING, "default"
+
+
+def _select_workflow_value(
+    explicit_value: Any,
+    workflow_suffix: str,
+    shared_suffix: str,
+    process_values: Mapping[str, Any],
+    dotenv_data: Mapping[str, Any],
+) -> tuple[Any, str]:
+    if explicit_value is not None:
+        return explicit_value, "explicit"
+    for values, prefix, layer in (
+        (process_values, _CANONICAL_PREFIX, "process"),
+        (process_values, _COMPATIBILITY_PREFIX, "process"),
+        (dotenv_data, _CANONICAL_PREFIX, "dotenv"),
+        (dotenv_data, _COMPATIBILITY_PREFIX, "dotenv"),
+    ):
+        for suffix in (workflow_suffix, shared_suffix):
+            key = f"{prefix}{suffix}"
+            if key in values:
+                return values[key], layer
     return _MISSING, "default"
 
 

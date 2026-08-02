@@ -81,6 +81,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.MASTER_RESUME_TEXT,
                 WorkspaceMember.TMP_DIR,
             ),
+            setting_overrides={
+                "highlight_codex_model": args.codex_model,
+                "highlight_codex_reasoning_effort": (args.codex_reasoning_effort),
+            },
         )
         store = ApplicationStateStore(config.paths)
         runner = with_model_request_policy(
@@ -93,10 +97,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             retry_count=args.retry_count,
         )
         model = resolve_codex_model_config(
-            default_model="gpt-5.6-sol",
-            default_reasoning_effort="high",
-            workflow_model_override=args.codex_model,
-            workflow_reasoning_effort_override=args.codex_reasoning_effort,
+            default_model=config.settings.highlight_codex_model,
+            default_reasoning_effort=(config.settings.highlight_codex_reasoning_effort),
             workflow="highlighting",
         )
         selected = set(args.job_ids or ())

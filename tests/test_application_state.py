@@ -2923,6 +2923,8 @@ def test_workflow_snapshot_is_coherent_canonical_immutable_and_content_hidden(
     assert snapshot.variants == (v1, v2)
     assert type(snapshot.variants) is tuple
     assert type(snapshot.revision) is ApplicationWorkflowRevision
+    assert type(snapshot.edit_revision) is ApplicationWorkflowRevision
+    assert type(snapshot.active_resume_yaml) is str
     rendered = f"{snapshot!r}\n{snapshot.revision!r}\n{snapshot.revision!s}"
     for forbidden in (
         JOB_ONE,

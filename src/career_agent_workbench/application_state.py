@@ -358,8 +358,8 @@ class ApplicationWorkflowSnapshot:
     application: ApplicationRecord = field(repr=False)
     variants: tuple[ResumeVariantRecord, ...] = field(repr=False)
     revision: ApplicationWorkflowRevision = field(repr=False)
-    edit_revision: ApplicationWorkflowRevision = field(repr=False)
-    active_resume_yaml: str | None = field(repr=False)
+    edit_revision: ApplicationWorkflowRevision | None = field(default=None, repr=False)
+    active_resume_yaml: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         return "ApplicationWorkflowSnapshot(hidden=True)"

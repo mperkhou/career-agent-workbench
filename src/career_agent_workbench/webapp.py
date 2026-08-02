@@ -24,6 +24,11 @@ from career_agent_workbench.cli_paths import (
     load_command_config,
 )
 from career_agent_workbench.config import RuntimeConfig, WorkspaceMember
+from career_agent_workbench.cover_letter_rendering import (
+    MAX_COVER_LETTER_HTML_CHARS,
+    blank_cover_letter,
+    render_cover_letter,
+)
 from career_agent_workbench.webapp_actions import (
     ACTION_OPTIONS,
     ATS_ACTION,
@@ -50,6 +55,7 @@ from career_agent_workbench.webapp_ingestion import (
 from career_agent_workbench.webapp_artifacts import (
     StoredArtifact,
     copy_artifact_to_downloads,
+    cover_letter_artifact,
     selected_resume_artifact,
     variant_resume_artifact,
     variant_review,
@@ -782,6 +788,78 @@ def create_app(
     @app.post("/resumes/<job_id>/edit/sync")
     def sync_resume(job_id: str):
         return _resume_mutation(job_id, "sync")
+
+    @app.get("/applications/<job_id>/cover-letter")
+    def edit_cover_letter(job_id: str):
+        try:
+            view = _tracker_view()
+            application = store.get_application(job_id)
+            value = application.cover_letter or blank_cover_letter()
+            body_html = value.get("body_html", "")
+            if (
+                type(body_html) is not str
+                or len(body_html) > MAX_COVER_LETTER_HTML_CHARS
+            ):
+                raise ValueError
+            result = request.args.get("result", "")
+            if result not in {"", "saved"}:
+                raise ValueError
+        except TrackerViewError:
+            return "Cover letter view is invalid.", 400
+        except ValueError:
+            return "Cover letter data is invalid.", 400
+        except Exception:  # noqa: BLE001 - state failures stay content-free.
+            return "Application was not found.", 404
+        return render_template(
+            "webapp/cover_letter_edit.html",
+            application=application,
+            body_html=body_html,
+            result=result,
+            view=view,
+        )
+
+    @app.post("/applications/<job_id>/cover-letter")
+    def save_cover_letter(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            if "body_html" not in request.form:
+                raise ValueError
+            rendered = render_cover_letter(request.form["body_html"])
+            store.store_clo(
+                job_id,
+                value=rendered.value,
+                pdf_content=rendered.pdf,
+            )
+        except Exception:  # noqa: BLE001 - mutations and content stay private.
+            return "Cover letter update is invalid.", 400
+        return redirect(
+            f"/applications/{job_id}/cover-letter?{urlencode((*view.query_items, ('result', 'saved')))}"
+        )
+
+    def _cover_letter_response(job_id: str, *, attachment: bool):
+        try:
+            artifact = cover_letter_artifact(store, job_id)
+        except Exception:  # noqa: BLE001 - missing artifacts stay content-free.
+            return "Artifact was not found.", 404
+        return _artifact_response(artifact, attachment=attachment)
+
+    @app.get("/cover-letters/<job_id>")
+    def cover_letter_pdf(job_id: str):
+        return _cover_letter_response(job_id, attachment=False)
+
+    @app.get("/cover-letters/<job_id>/download")
+    def download_cover_letter_pdf(job_id: str):
+        return _cover_letter_response(job_id, attachment=True)
+
+    @app.post("/cover-letters/<job_id>/copy-to-downloads")
+    def copy_cover_letter(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            artifact = cover_letter_artifact(store, job_id)
+            copy_artifact_to_downloads(paths, artifact)
+        except Exception:  # noqa: BLE001 - private copy failures stay generic.
+            return "Cover letter copy could not be completed.", 400
+        return redirect(view.index_url)
 
     return app
 

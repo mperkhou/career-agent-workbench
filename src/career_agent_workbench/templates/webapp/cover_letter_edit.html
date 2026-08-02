@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cover letter editor</title>
+    <style>
+      body { margin: 2rem auto; width: min(1000px, calc(100% - 2rem)); font-family: system-ui, sans-serif; color: #172033; }
+      textarea { width: 100%; min-height: 30rem; box-sizing: border-box; font-family: ui-monospace, monospace; }
+      .actions { display: flex; gap: .65rem; flex-wrap: wrap; margin: 1rem 0; }
+    </style>
+  </head>
+  <body>
+    <nav><a href="{{ view.index_url }}">Back to tracker</a></nav>
+    <h1>Cover letter editor</h1>
+    {% if result == "saved" %}<p role="status">Cover letter saved and rendered.</p>{% endif %}
+    <p>Allowed formatting: paragraphs, divisions, line breaks, bold, italic, and safe links.</p>
+    <form method="post" action="/applications/{{ application.job_id }}/cover-letter">
+      {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <label>Body HTML<textarea name="body_html" maxlength="500000">{{ body_html }}</textarea></label>
+      <button type="submit">Save and render</button>
+    </form>
+    <div class="actions">
+      <a href="/cover-letters/{{ application.job_id }}">View PDF</a>
+      <a href="/cover-letters/{{ application.job_id }}/download">Download PDF</a>
+      <form method="post" action="/cover-letters/{{ application.job_id }}/copy-to-downloads">
+        {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <button type="submit">Copy PDF to configured downloads</button>
+      </form>
+    </div>
+  </body>
+</html>

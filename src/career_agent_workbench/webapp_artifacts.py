@@ -85,6 +85,22 @@ def variant_resume_artifact(
     raise WebArtifactError("Artifact is unavailable.")
 
 
+def cover_letter_artifact(
+    store: ApplicationStateStore,
+    job_id: str,
+) -> StoredArtifact:
+    """Return the exact stored cover-letter PDF artifact."""
+
+    application = store.get_application(job_id)
+    if application.cover_letter_pdf is None:
+        raise WebArtifactError("Artifact is unavailable.")
+    return StoredArtifact(
+        application.cover_letter_pdf,
+        application.cover_letter_mime_type,
+        application.cover_letter_filename,
+    )
+
+
 def variant_review(snapshot: ApplicationWorkflowSnapshot) -> tuple[dict[str, Any], ...]:
     """Build bounded structured and YAML comparisons in canonical order."""
 
@@ -209,6 +225,7 @@ __all__ = [
     "StoredArtifact",
     "WebArtifactError",
     "copy_artifact_to_downloads",
+    "cover_letter_artifact",
     "selected_resume_artifact",
     "variant_resume_artifact",
     "variant_review",

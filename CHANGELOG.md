@@ -32,6 +32,9 @@
 - Restored the local tracker view and lifecycle controls, bounded Add/Seed and
   public URL ingestion, sequential allowlisted resume actions with app-scoped
   progress, and explicit selected-resume ATS recalculation.
+- Restored selected and exact-variant resume views/downloads, comparison and
+  selection controls, guarded configured copies, JOD and CAS-governed resume
+  editors, and sanitized cover-letter editing with deterministic PDF output.
 
 ### Safety and governance
 

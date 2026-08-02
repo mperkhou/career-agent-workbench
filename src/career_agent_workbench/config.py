@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,12 +18,13 @@ from dotenv.parser import parse_stream
 _CANONICAL_PREFIX = "CAREER_AGENT_WORKBENCH_"
 _COMPATIBILITY_PREFIX = "LINKEDIN_CAREER_MCP_"
 _ENV_FILE_KEY = f"{_CANONICAL_PREFIX}ENV_FILE"
+_PRIVATE_ENV_FILE_KEY = f"{_CANONICAL_PREFIX}PRIVATE_ENV_FILE"
 _MISSING = object()
 
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0 Safari/537.36 career-agent-workbench/1.0.0"
+    "Chrome/125.0 Safari/537.36 career-agent-workbench/1.1.0"
 )
 
 
@@ -165,13 +167,15 @@ class RuntimeConfig:
     paths: WorkspacePaths
     settings: Settings
     env_file: Path | None
+    private_env_file: Path | None = None
 
     def __repr__(self) -> str:
         return (
             "RuntimeConfig("
             f"paths_configured={any(getattr(self.paths, field) is not None for field in self.paths.__dataclass_fields__)}, "
             "settings_configured=True, "
-            f"env_file_configured={self.env_file is not None})"
+            f"env_file_configured={self.env_file is not None}, "
+            f"private_env_file_configured={self.private_env_file is not None})"
         )
 
 
@@ -225,24 +229,46 @@ def load_runtime_config(
     env_file = (
         _select_env_file(process_values, invocation_cwd) if discover_dotenv else None
     )
-    dotenv_data = _read_env_file(env_file) if env_file is not None else {}
+    bootstrap_data = _read_bootstrap_env_file(env_file) if env_file is not None else {}
 
+    bootstrap_root = _resolve_workspace_root(
+        None,
+        process_values,
+        bootstrap_data,
+        env_file,
+        invocation_cwd,
+    )
     root = _resolve_workspace_root(
         explicit.workspace,
         process_values,
-        dotenv_data,
+        bootstrap_data,
         env_file,
         invocation_cwd,
+    )
+    private_env_file = _select_private_env_file(
+        process_values,
+        bootstrap_data,
+        env_file,
+        invocation_cwd,
+        bootstrap_root if bootstrap_root is not None else root,
+    )
+    private_data = (
+        _read_env_file(private_env_file) if private_env_file is not None else {}
     )
     paths = _resolve_workspace_paths(
         explicit,
         process_values,
-        dotenv_data,
+        private_data,
         root,
         invocation_cwd,
     )
-    settings = _resolve_settings(explicit, process_values, dotenv_data)
-    return RuntimeConfig(paths=paths, settings=settings, env_file=env_file)
+    settings = _resolve_settings(explicit, process_values, private_data)
+    return RuntimeConfig(
+        paths=paths,
+        settings=settings,
+        env_file=env_file,
+        private_env_file=private_env_file,
+    )
 
 
 def load_settings(
@@ -325,6 +351,88 @@ def _read_env_file(env_file: Path) -> dict[str, str | None]:
         raise
     except Exception:  # noqa: BLE001 - sanitize library and file failures
         raise EnvironmentFileError("Selected environment file is not usable.") from None
+
+
+def _read_bootstrap_env_file(env_file: Path) -> dict[str, str | None]:
+    values = _read_env_file(env_file)
+    allowed = {
+        f"{_CANONICAL_PREFIX}WORKSPACE",
+        f"{_COMPATIBILITY_PREFIX}WORKSPACE",
+        _PRIVATE_ENV_FILE_KEY,
+    }
+    if any(key not in allowed for key in values):
+        raise EnvironmentFileError("Selected environment file is not usable.")
+    return values
+
+
+def _select_private_env_file(
+    process_values: Mapping[str, Any],
+    bootstrap_data: Mapping[str, Any],
+    bootstrap_file: Path | None,
+    cwd: Path,
+    root: Path | None,
+) -> Path | None:
+    raw_selector: Any = _MISSING
+    for values in (process_values, bootstrap_data):
+        if _PRIVATE_ENV_FILE_KEY in values:
+            raw_selector = values[_PRIVATE_ENV_FILE_KEY]
+            break
+    if raw_selector is _MISSING:
+        return None
+    if _is_blank(raw_selector) or root is None:
+        raise EnvironmentFileError("Private environment file selector is invalid.")
+    try:
+        selector = _coerce_path(raw_selector, "private_env_file")
+        base = bootstrap_file.parent if bootstrap_file is not None else cwd
+        candidate = selector if selector.is_absolute() else base / selector
+    except InvalidConfigurationError:
+        raise EnvironmentFileError(
+            "Private environment file selector is invalid."
+        ) from None
+    if _has_symlink_component(candidate):
+        raise EnvironmentFileError("Private environment file is not usable.")
+    try:
+        selected = _normalize_path(candidate, "private_env_file")
+    except InvalidConfigurationError:
+        raise EnvironmentFileError(
+            "Private environment file selector is invalid."
+        ) from None
+    public_root = _editable_source_root()
+    if (
+        not _is_within(selected, root)
+        or (public_root is not None and _is_within(selected, public_root))
+        or not _is_secure_private_env_file(selected)
+    ):
+        raise EnvironmentFileError("Private environment file is not usable.")
+    return selected
+
+
+def _is_secure_private_env_file(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        return False
+    if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600:
+        return False
+    return True
+
+
+def _has_symlink_component(path: Path) -> bool:
+    try:
+        absolute = path if path.is_absolute() else Path.cwd() / path
+        current = Path(absolute.anchor)
+        for part in absolute.parts[1:]:
+            current /= part
+            try:
+                if current.is_symlink():
+                    return True
+            except OSError:
+                return True
+        return False
+    except (OSError, RuntimeError, ValueError):
+        return True
 
 
 def _resolve_workspace_root(

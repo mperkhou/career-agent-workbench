@@ -96,6 +96,30 @@ def _load(
     )
 
 
+def _write_private_env(
+    bootstrap_dir: Path,
+    lines: list[str] | tuple[str, ...],
+    *,
+    workspace: Path | None = None,
+) -> tuple[Path, Path]:
+    selected_workspace = workspace or (bootstrap_dir / "fictional-ops")
+    selected_workspace.mkdir(parents=True, exist_ok=True)
+    private_env = selected_workspace / ".env"
+    private_env.write_text("\n".join(lines), encoding="utf-8")
+    private_env.chmod(0o600)
+    bootstrap = bootstrap_dir / ".env"
+    bootstrap.write_text(
+        "\n".join(
+            (
+                f"{CANONICAL}WORKSPACE={selected_workspace}",
+                f"{CANONICAL}PRIVATE_ENV_FILE={private_env}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return bootstrap, private_env
+
+
 def test_configuration_dataclasses_are_frozen_and_slotted(tmp_path: Path) -> None:
     values: tuple[Any, ...] = (
         RuntimeOverrides(),
@@ -202,7 +226,7 @@ def test_complete_precedence_order(
     lines = [f"{COMPATIBILITY}USER_AGENT=dotenv-compatibility"]
     if dotenv_canonical:
         lines.append(f"{CANONICAL}USER_AGENT={dotenv_canonical}")
-    (tmp_path / ".env").write_text("\n".join(lines), encoding="utf-8")
+    _write_private_env(tmp_path, lines)
 
     loaded = _load(
         tmp_path,
@@ -240,31 +264,27 @@ def test_blank_canonical_values_block_lower_layers_and_reset(tmp_path: Path) -> 
 
 
 def test_valueless_dotenv_key_is_a_blank_barrier(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            (
-                f"{CANONICAL}USER_AGENT",
-                f"{COMPATIBILITY}USER_AGENT=blocked-agent",
-            )
+    _write_private_env(
+        tmp_path,
+        (
+            f"{CANONICAL}USER_AGENT",
+            f"{COMPATIBILITY}USER_AGENT=blocked-agent",
         ),
-        encoding="utf-8",
     )
 
     assert _load(tmp_path).settings.user_agent == Settings().user_agent
 
 
 def test_valid_dotenv_parser_forms_remain_supported(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            (
-                "# fictional comment",
-                "",
-                f'export {CANONICAL}MAX_RESULTS = "74"',
-                f"{CANONICAL}USER_AGENT='fictional quoted agent'",
-                f"{CANONICAL}LLM_API_KEY",
-            )
+    _write_private_env(
+        tmp_path,
+        (
+            "# fictional comment",
+            "",
+            f'export {CANONICAL}MAX_RESULTS = "74"',
+            f"{CANONICAL}USER_AGENT='fictional quoted agent'",
+            f"{CANONICAL}LLM_API_KEY",
         ),
-        encoding="utf-8",
     )
 
     loaded = _load(tmp_path)
@@ -281,7 +301,7 @@ def test_malformed_dotenv_fails_before_value_loading_without_output(
 ) -> None:
     malformed_marker = "fictional-malformed-marker"
     later_marker = "fictional-later-value-marker"
-    selected = tmp_path / ".env"
+    _bootstrap, selected = _write_private_env(tmp_path, ())
     selected.write_text(
         "\n".join(
             (
@@ -294,10 +314,13 @@ def test_malformed_dotenv_fails_before_value_loading_without_output(
     )
     value_loader_called = False
 
+    real_value_loader = config_module.dotenv_values
+
     def track_value_loader(*args: Any, **kwargs: Any) -> dict[str, str]:
         nonlocal value_loader_called
-        value_loader_called = True
-        return {}
+        if Path(args[0]) == selected:
+            value_loader_called = True
+        return dict(real_value_loader(*args, **kwargs))
 
     monkeypatch.setattr(config_module, "dotenv_values", track_value_loader)
     caplog.set_level(logging.DEBUG)
@@ -315,6 +338,107 @@ def test_malformed_dotenv_fails_before_value_loading_without_output(
         assert marker not in caplog.text
         assert marker not in captured.out
         assert marker not in captured.err
+
+
+@pytest.mark.parametrize("kind", ("missing", "mode", "directory", "symlink"))
+def test_private_env_file_fails_closed_without_path_disclosure(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    workspace = tmp_path / "fictional-ops"
+    workspace.mkdir()
+    private_env = workspace / ".env"
+    if kind == "mode":
+        private_env.write_text(f"{CANONICAL}MAX_RESULTS=41\n", encoding="utf-8")
+        private_env.chmod(0o644)
+    elif kind == "directory":
+        private_env.mkdir()
+    elif kind == "symlink":
+        target = workspace / "private-settings"
+        target.write_text(f"{CANONICAL}MAX_RESULTS=41\n", encoding="utf-8")
+        target.chmod(0o600)
+        private_env.symlink_to(target)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                f"{CANONICAL}WORKSPACE={workspace}",
+                f"{CANONICAL}PRIVATE_ENV_FILE={private_env}",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EnvironmentFileError) as caught:
+        _load(tmp_path)
+
+    assert str(caught.value) == "Private environment file is not usable."
+    assert os.fspath(private_env) not in str(caught.value)
+
+
+def test_private_env_must_be_contained_by_workspace_and_outside_public_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    public_root = tmp_path / "fictional-public"
+    workspace = tmp_path / "fictional-ops"
+    public_root.mkdir()
+    workspace.mkdir()
+    private_env = public_root / "private-settings"
+    private_env.write_text(f"{CANONICAL}MAX_RESULTS=41\n", encoding="utf-8")
+    private_env.chmod(0o600)
+    (public_root / ".env").write_text(
+        "\n".join(
+            (
+                f"{CANONICAL}WORKSPACE={workspace}",
+                f"{CANONICAL}PRIVATE_ENV_FILE={private_env}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "_editable_source_root", lambda: public_root)
+
+    with pytest.raises(EnvironmentFileError, match="not usable"):
+        _load(public_root)
+
+
+def test_bootstrap_resolves_relative_private_file_after_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "fictional-ops"
+    workspace.mkdir()
+    private_env = workspace / ".env"
+    private_env.write_text(f"{CANONICAL}MAX_RESULTS=43\n", encoding="utf-8")
+    private_env.chmod(0o600)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                f"{CANONICAL}WORKSPACE=fictional-ops",
+                f"{CANONICAL}PRIVATE_ENV_FILE=fictional-ops/.env",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = _load(tmp_path)
+
+    assert loaded.paths.root == workspace
+    assert loaded.private_env_file == private_env
+    assert loaded.settings.max_results == 43
+
+
+def test_explicit_workspace_override_keeps_lower_layer_private_settings(
+    tmp_path: Path,
+) -> None:
+    _write_private_env(tmp_path, [f"{CANONICAL}MAX_RESULTS=43"])
+    override = tmp_path / "fictional-explicit-workspace"
+
+    loaded = _load(
+        tmp_path,
+        overrides=RuntimeOverrides(workspace=override),
+    )
+
+    assert loaded.paths.root == override
+    assert loaded.settings.max_results == 43
 
 
 def test_valid_scalar_parsing_accepts_natural_and_string_overrides(
@@ -450,9 +574,19 @@ def test_pathlike_interrupts_are_not_caught(tmp_path: Path) -> None:
 def test_relative_explicit_env_file_resolves_from_invocation_cwd(
     tmp_path: Path,
 ) -> None:
-    selected = tmp_path / "fictional-settings.env"
+    workspace = tmp_path / "fictional-ops"
+    workspace.mkdir()
+    private_env = workspace / ".env"
+    private_env.write_text(f"{CANONICAL}MAX_RESULTS=44\n", encoding="utf-8")
+    private_env.chmod(0o600)
+    selected = tmp_path / "fictional-bootstrap.env"
     selected.write_text(
-        f"{CANONICAL}MAX_RESULTS=44\n",
+        "\n".join(
+            (
+                f"{CANONICAL}WORKSPACE={workspace}",
+                f"{CANONICAL}PRIVATE_ENV_FILE={private_env}",
+            )
+        ),
         encoding="utf-8",
     )
     loaded = _load(
@@ -461,6 +595,7 @@ def test_relative_explicit_env_file_resolves_from_invocation_cwd(
     )
 
     assert loaded.env_file == selected
+    assert loaded.private_env_file == private_env
     assert loaded.settings.max_results == 44
 
 
@@ -470,16 +605,14 @@ def test_cwd_dotenv_wins_over_editable_root(
 ) -> None:
     source_root = tmp_path / "fictional-source"
     source_root.mkdir()
-    (source_root / ".env").write_text(
-        f"{CANONICAL}USER_AGENT=editable-value\n",
-        encoding="utf-8",
+    _write_private_env(
+        source_root,
+        [f"{CANONICAL}USER_AGENT=editable-value"],
+        workspace=tmp_path / "source-ops",
     )
     invocation = tmp_path / "invocation"
     invocation.mkdir()
-    (invocation / ".env").write_text(
-        f"{CANONICAL}USER_AGENT=cwd-value\n",
-        encoding="utf-8",
-    )
+    _write_private_env(invocation, [f"{CANONICAL}USER_AGENT=cwd-value"])
     monkeypatch.setattr(config_module, "_editable_source_root", lambda: source_root)
 
     loaded = _load(invocation)
@@ -493,10 +626,10 @@ def test_editable_root_fallback_is_bounded(
 ) -> None:
     source_root = tmp_path / "fictional-source"
     source_root.mkdir()
-    source_env = source_root / ".env"
-    source_env.write_text(
-        f"{CANONICAL}MAX_RESULTS=45\n",
-        encoding="utf-8",
+    source_env, _private_env = _write_private_env(
+        source_root,
+        [f"{CANONICAL}MAX_RESULTS=45"],
+        workspace=tmp_path / "source-ops",
     )
     invocation = tmp_path / "nested" / "invocation"
     invocation.mkdir(parents=True)
@@ -589,34 +722,30 @@ def test_blank_explicit_env_file_selector_is_invalid(tmp_path: Path) -> None:
         _load(tmp_path, {f"{CANONICAL}ENV_FILE": " "})
 
 
-def test_env_file_selector_inside_dotenv_is_ignored(tmp_path: Path) -> None:
-    chained = tmp_path / "chained.env"
-    chained.write_text(f"{CANONICAL}MAX_RESULTS=49\n", encoding="utf-8")
+def test_bootstrap_rejects_settings_and_chained_selector(tmp_path: Path) -> None:
     primary = tmp_path / ".env"
     primary.write_text(
         "\n".join(
             (
-                f"{CANONICAL}ENV_FILE={chained.name}",
+                f"{CANONICAL}WORKSPACE=fictional-ops",
+                f"{CANONICAL}ENV_FILE=chained.env",
                 f"{CANONICAL}MAX_RESULTS=50",
             )
         ),
         encoding="utf-8",
     )
 
-    loaded = _load(tmp_path)
-    assert loaded.env_file == primary
-    assert loaded.settings.max_results == 50
+    with pytest.raises(EnvironmentFileError, match="not usable"):
+        _load(tmp_path)
 
 
 def test_dotenv_interpolation_is_disabled(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            (
-                "FICTIONAL_BASE=expanded-value",
-                f"{CANONICAL}USER_AGENT=${{FICTIONAL_BASE}}",
-            )
+    _write_private_env(
+        tmp_path,
+        (
+            "FICTIONAL_BASE=expanded-value",
+            f"{CANONICAL}USER_AGENT=${{FICTIONAL_BASE}}",
         ),
-        encoding="utf-8",
     )
     assert _load(tmp_path).settings.user_agent == "${FICTIONAL_BASE}"
 
@@ -671,12 +800,20 @@ def test_relative_environment_members_resolve_beneath_root(
 ) -> None:
     root = tmp_path / "fictional-workspace"
     selected = tmp_path / ".env"
-    lines = [f"{CANONICAL}WORKSPACE={root}"]
+    private = root / ".env"
+    root.mkdir()
+    private_lines: list[str] = []
+    lines = [
+        f"{CANONICAL}WORKSPACE={root}",
+        f"{CANONICAL}PRIVATE_ENV_FILE={private}",
+    ]
     process_values: dict[str, str] = {}
     if member_layer == "process":
         process_values[f"{CANONICAL}PROFILE_DIR"] = "custom-member"
     else:
-        lines.append(f"{CANONICAL}PROFILE_DIR=custom-member")
+        private_lines.append(f"{CANONICAL}PROFILE_DIR=custom-member")
+    private.write_text("\n".join(private_lines), encoding="utf-8")
+    private.chmod(0o600)
     selected.write_text("\n".join(lines), encoding="utf-8")
 
     loaded = _load(tmp_path, process_values)
@@ -890,7 +1027,7 @@ def test_values_paths_errors_and_output_are_secret_safe(
     ("flag", "expected"),
     (
         ("--help", "Career Agent Workbench"),
-        ("--version", "career-agent-workbench 1.0.0"),
+        ("--version", "career-agent-workbench 1.1.0"),
     ),
 )
 def test_help_and_version_need_no_configuration(
@@ -911,6 +1048,7 @@ def test_env_example_is_parseable_trackable_and_public_safe() -> None:
 
     assert parsed == {
         f"{CANONICAL}WORKSPACE": "../career-agent-workbench-ops",
+        f"{CANONICAL}PRIVATE_ENV_FILE": "../career-agent-workbench-ops/.env",
     }
     assert not (repository / ".env").exists()
     ignored_env = subprocess.run(

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0] - In progress
+
+### Added
+
+- Added two-phase bootstrap/private dotenv loading for an external ops
+  workspace, with deterministic precedence, exact private-file permissions,
+  path containment, immutable loads, and content-hidden failures.
+
+### Safety and governance
+
+- Keeps the public bootstrap dotenv limited to non-secret workspace discovery;
+  private runtime values are loaded only from a user-only file outside the
+  public repository.
+
 ## [1.0.0] - 2026-08-01
 
 ### Added

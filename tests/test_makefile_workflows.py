@@ -42,7 +42,7 @@ BATCH_TARGETS = (
 
 def _dry_run(target: str, *variables: str) -> str:
     completed = subprocess.run(
-        ["make", "-n", target, *variables],
+        ["make", "--no-print-directory", "-n", target, *variables],
         cwd=ROOT,
         text=True,
         capture_output=True,

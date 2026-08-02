@@ -52,6 +52,8 @@ from career_agent_workbench.application_state import (
     QueryOutcomeWrite,
     ResumeVariantWrite,
     artifact_filename,
+    workflow_revision_from_token,
+    workflow_revision_token,
 )
 from career_agent_workbench.config import WorkspacePaths
 from career_agent_workbench.providers.linkedin_public import (
@@ -2955,6 +2957,7 @@ def test_workflow_revision_excludes_human_state_and_includes_prompt_state(
     store.archive([JOB_ONE])
     human_only = store.get_workflow_snapshot(JOB_ONE)
     assert human_only.revision == initial.revision
+    assert human_only.edit_revision != initial.edit_revision
 
     store.store_jod(JOB_ONE, source_text="source-two", prompt_text="prompt-two")
     jod_changed = store.get_workflow_snapshot(JOB_ONE)
@@ -2972,6 +2975,157 @@ def test_workflow_revision_excludes_human_state_and_includes_prompt_state(
     )
     metadata_changed = store.get_workflow_snapshot(JOB_ONE)
     assert metadata_changed.revision != sibling_changed.revision
+
+
+def test_resume_edit_revision_token_and_active_variant_cas_are_targeted(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_jod(JOB_ONE, source_text="source", prompt_text="prompt")
+    v1 = store.upsert_resume_variant(JOB_ONE, _variant("v1", marker="original-v1"))
+    original_v2 = store.upsert_resume_variant(
+        JOB_ONE, _variant("v2", parent="v1", marker="original-v2")
+    )
+    store.select_resume_variant(JOB_ONE, "v2")
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    token = workflow_revision_token(snapshot.edit_revision)
+    assert len(token) == 64
+    assert workflow_revision_from_token(token) == snapshot.edit_revision
+    for rejected in (None, "", token.upper(), "0" * 63, "private-content"):
+        with pytest.raises(ApplicationStateValidationError):
+            workflow_revision_from_token(rejected)
+
+    saved = store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: Edited\nsummary: fictional edit\n",
+        resume_html="<p>edited</p>",
+        resume_pdf=b"pdf-edited",
+        ats=AtsFields(score=91, parsing_score=90),
+        expected_revision=workflow_revision_from_token(token),
+        backup_current=True,
+    )
+    assert saved.selected_resume_variant == "v2"
+    assert saved.resume_variant_selection_mode == "manual"
+    assert saved.application_resume == {
+        "name": "Edited",
+        "summary": "fictional edit",
+    }
+    assert saved.application_resume_backup == original_v2.application_resume
+    assert saved.application_resume_backup_target == "v2"
+    assert store.get_resume_variant(JOB_ONE, "v1") == v1
+    edited_v2 = store.get_resume_variant(JOB_ONE, "v2")
+    assert edited_v2.parent_variant_key == original_v2.parent_variant_key
+    assert edited_v2.variant_label == original_v2.variant_label
+    assert edited_v2.source == original_v2.source
+    assert edited_v2.evidence_packet == original_v2.evidence_packet
+    assert edited_v2.validation == original_v2.validation
+    assert edited_v2.resume_html == "<p>edited</p>"
+    assert edited_v2.resume_pdf == b"pdf-edited"
+    assert edited_v2.ats.score == 91
+
+
+def test_resume_edit_revert_is_reversible_and_sync_preserves_backup(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1", marker="first"))
+    initial = store.get_workflow_snapshot(JOB_ONE)
+    store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: Edited\nvalue: two\n",
+        resume_html="<p>two</p>",
+        resume_pdf=b"pdf-two",
+        ats=None,
+        expected_revision=initial.edit_revision,
+        backup_current=True,
+    )
+    edited = store.get_workflow_snapshot(JOB_ONE)
+    backup_before_sync = edited.application.application_resume_backup
+    assert backup_before_sync == initial.application.application_resume
+
+    store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text=edited.active_resume_yaml or "",
+        resume_html="<p>two-synced</p>",
+        resume_pdf=b"pdf-two-synced",
+        ats=None,
+        expected_revision=edited.edit_revision,
+        backup_current=False,
+    )
+    synced = store.get_workflow_snapshot(JOB_ONE)
+    assert synced.active_resume_yaml == edited.active_resume_yaml
+    assert synced.application.application_resume_backup == backup_before_sync
+    assert synced.application.application_resume_backup_target == "v1"
+
+    reverted = store.revert_active_resume_if_revision(
+        JOB_ONE,
+        resume_html="<p>one</p>",
+        resume_pdf=b"pdf-one",
+        ats=None,
+        expected_revision=synced.edit_revision,
+    )
+    assert reverted.application_resume == initial.application.application_resume
+    assert reverted.application_resume_backup == edited.application.application_resume
+    assert reverted.application_resume_backup_target == "v1"
+
+    reversible = store.get_workflow_snapshot(JOB_ONE)
+    restored = store.revert_active_resume_if_revision(
+        JOB_ONE,
+        resume_html="<p>two-again</p>",
+        resume_pdf=b"pdf-two-again",
+        ats=None,
+        expected_revision=reversible.edit_revision,
+    )
+    assert restored.application_resume == edited.application.application_resume
+    assert restored.application_resume_backup == initial.application.application_resume
+
+
+def test_resume_edit_rejects_selection_drift_without_partial_write(
+    tmp_path: Path,
+) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.upsert_resume_variant(JOB_ONE, _variant("v2", parent="v1"))
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    store.select_resume_variant(JOB_ONE, "v1")
+    before = _schema_snapshot(database)
+
+    with pytest.raises(ApplicationStateConflictError):
+        store.store_active_resume_if_revision(
+            JOB_ONE,
+            yaml_text="name: rejected\n",
+            resume_html="<p>rejected</p>",
+            resume_pdf=b"pdf-rejected",
+            ats=None,
+            expected_revision=snapshot.edit_revision,
+            backup_current=True,
+        )
+    assert _schema_snapshot(database) == before
+
+
+def test_resume_edit_updates_fallback_without_inventing_selection(
+    tmp_path: Path,
+) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_aro(JOB_ONE, yaml_text="name: Before\n")
+    snapshot = store.get_workflow_snapshot(JOB_ONE)
+    updated = store.store_active_resume_if_revision(
+        JOB_ONE,
+        yaml_text="name: After\n",
+        resume_html="<p>after</p>",
+        resume_pdf=b"pdf-after",
+        ats=AtsFields(score=77),
+        expected_revision=snapshot.edit_revision,
+        backup_current=True,
+    )
+    assert updated.selected_resume_variant is None
+    assert updated.resume_variant_selection_mode == "auto"
+    assert updated.application_resume == {"name": "After"}
+    assert updated.application_resume_backup == {"name": "Before"}
+    assert updated.application_resume_backup_target == "fallback"
+    assert updated.resume_html == "<p>after</p>"
+    assert updated.resume_pdf == b"pdf-after"
+    assert updated.ats.score == 77
 
 
 def test_conditional_variant_write_allows_pin_status_note_and_archive_drift(

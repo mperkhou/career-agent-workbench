@@ -12,7 +12,12 @@ from urllib.parse import urlencode
 
 from flask import Flask, Response, jsonify, redirect, render_template, request
 
-from career_agent_workbench.application_state import ApplicationStateStore
+from career_agent_workbench.application_state import (
+    ApplicationStateConflictError,
+    ApplicationStateStore,
+    workflow_revision_from_token,
+    workflow_revision_token,
+)
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
@@ -48,6 +53,16 @@ from career_agent_workbench.webapp_artifacts import (
     selected_resume_artifact,
     variant_resume_artifact,
     variant_review,
+)
+from career_agent_workbench.webapp_editors import (
+    AtsCalculator,
+    ResumeHtmlRenderer,
+    ResumePdfRenderer,
+    active_resume_target,
+    calculate_optional_ats,
+    compare_jod,
+    render_resume_edit,
+    resume_yaml_text,
 )
 from career_agent_workbench.webapp_tracker import (
     TRACKER_DIRECTIONS,
@@ -207,6 +222,9 @@ def create_app(
     project_root: Path | None = None,
     linkedin_details_fetcher: LinkedInDetailsFetcher | None = None,
     generic_html_fetcher: GenericHtmlFetcher | None = None,
+    resume_html_renderer: ResumeHtmlRenderer | None = None,
+    resume_pdf_renderer: ResumePdfRenderer | None = None,
+    ats_calculator: AtsCalculator | None = None,
 ) -> Flask:
     """Create one app from an already-resolved immutable runtime."""
 
@@ -240,6 +258,21 @@ def create_app(
             timeout_seconds=runtime.settings.timeout_seconds,
         )
     )
+
+    def _render_active_resume(yaml_text: str, snapshot):
+        options = {}
+        if resume_html_renderer is not None:
+            options["html_renderer"] = resume_html_renderer
+        if resume_pdf_renderer is not None:
+            options["pdf_renderer"] = resume_pdf_renderer
+        if ats_calculator is not None:
+            options["ats_calculator"] = ats_calculator
+        return render_resume_edit(
+            yaml_text,
+            prompt_jod=snapshot.application.prompt_job_description,
+            source_jod=snapshot.application.job_description,
+            **options,
+        )
 
     @app.get("/")
     def index():
@@ -590,6 +623,165 @@ def create_app(
         except Exception:  # noqa: BLE001 - private copy failures stay generic.
             return "Resume copy could not be completed.", 400
         return redirect(view.index_url)
+
+    @app.get("/applications/<job_id>/jod")
+    def edit_jod(job_id: str):
+        try:
+            view = _tracker_view()
+            application = store.get_application(job_id)
+            comparison = compare_jod(
+                application.job_description,
+                application.prompt_job_description,
+            )
+            result = request.args.get("result", "")
+            if result not in {"", "refreshed", "skipped"}:
+                raise ValueError
+        except TrackerViewError:
+            return "JOD view is invalid.", 400
+        except ValueError:
+            return "JOD view is invalid.", 400
+        except Exception:  # noqa: BLE001 - state failures stay content-free.
+            return "Application was not found.", 404
+        return render_template(
+            "webapp/jod.html",
+            application=application,
+            comparison=comparison,
+            result=result,
+            view=view,
+        )
+
+    @app.post("/applications/<job_id>/jod")
+    def save_jod(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            if "source_text" not in request.form or "prompt_text" not in request.form:
+                raise ValueError
+            source_text = request.form["source_text"]
+            prompt_text = request.form["prompt_text"]
+            application = store.get_application(job_id)
+            ats = None
+            if application.resume_pdf is not None:
+                options = {}
+                if ats_calculator is not None:
+                    options["ats_calculator"] = ats_calculator
+                ats = calculate_optional_ats(
+                    application.resume_pdf,
+                    prompt_jod=prompt_text,
+                    source_jod=source_text,
+                    **options,
+                )
+            store.store_jod(
+                job_id,
+                source_text=source_text,
+                prompt_text=prompt_text,
+                ats=ats,
+            )
+        except Exception:  # noqa: BLE001 - mutation failures stay content-free.
+            return "JOD update is invalid.", 400
+        result = "refreshed" if ats is not None else "skipped"
+        return redirect(
+            f"/applications/{job_id}/jod?{urlencode((*view.query_items, ('result', result)))}"
+        )
+
+    @app.get("/resumes/<job_id>/edit")
+    def edit_resume(job_id: str):
+        try:
+            view = _tracker_view()
+            snapshot = store.get_workflow_snapshot(job_id)
+            if snapshot.active_resume_yaml is None:
+                raise LookupError
+            result = request.args.get("result", "")
+            if result not in {"", "saved", "reverted", "synced"}:
+                raise ValueError
+        except TrackerViewError:
+            return "Resume editor view is invalid.", 400
+        except ValueError:
+            return "Resume editor view is invalid.", 400
+        except Exception:  # noqa: BLE001 - state failures stay content-free.
+            return "Resume was not found.", 404
+        target = active_resume_target(snapshot)
+        can_revert = (
+            snapshot.application.application_resume_backup is not None
+            and snapshot.application.application_resume_backup_target == target
+        )
+        return render_template(
+            "webapp/resume_edit.html",
+            application=snapshot.application,
+            yaml_text=snapshot.active_resume_yaml,
+            revision=workflow_revision_token(snapshot.edit_revision),
+            target=target,
+            can_revert=can_revert,
+            result=result,
+            view=view,
+        )
+
+    def _resume_mutation(job_id: str, operation: str):
+        try:
+            view = _tracker_view(form=True)
+            revision = workflow_revision_from_token(request.form.get("revision"))
+            snapshot = store.get_workflow_snapshot(job_id)
+            if operation == "save":
+                if "yaml_text" not in request.form:
+                    raise ValueError
+                rendered = _render_active_resume(request.form["yaml_text"], snapshot)
+                store.store_active_resume_if_revision(
+                    job_id,
+                    yaml_text=rendered.yaml_text,
+                    resume_html=rendered.html,
+                    resume_pdf=rendered.pdf,
+                    ats=rendered.ats,
+                    expected_revision=revision,
+                    backup_current=True,
+                )
+                result = "saved"
+            elif operation == "sync":
+                if snapshot.active_resume_yaml is None:
+                    raise ValueError
+                rendered = _render_active_resume(snapshot.active_resume_yaml, snapshot)
+                store.store_active_resume_if_revision(
+                    job_id,
+                    yaml_text=snapshot.active_resume_yaml,
+                    resume_html=rendered.html,
+                    resume_pdf=rendered.pdf,
+                    ats=rendered.ats,
+                    expected_revision=revision,
+                    backup_current=False,
+                )
+                result = "synced"
+            elif operation == "revert":
+                backup = snapshot.application.application_resume_backup
+                if backup is None:
+                    raise ValueError
+                rendered = _render_active_resume(resume_yaml_text(backup), snapshot)
+                store.revert_active_resume_if_revision(
+                    job_id,
+                    resume_html=rendered.html,
+                    resume_pdf=rendered.pdf,
+                    ats=rendered.ats,
+                    expected_revision=revision,
+                )
+                result = "reverted"
+            else:
+                raise ValueError
+        except ApplicationStateConflictError:
+            return "Resume changed; reload before editing.", 409
+        except Exception:  # noqa: BLE001 - editor failures stay content-free.
+            return "Resume update is invalid.", 400
+        return redirect(
+            f"/resumes/{job_id}/edit?{urlencode((*view.query_items, ('result', result)))}"
+        )
+
+    @app.post("/resumes/<job_id>/edit")
+    def save_resume(job_id: str):
+        return _resume_mutation(job_id, "save")
+
+    @app.post("/resumes/<job_id>/edit/revert")
+    def revert_resume(job_id: str):
+        return _resume_mutation(job_id, "revert")
+
+    @app.post("/resumes/<job_id>/edit/sync")
+    def sync_resume(job_id: str):
+        return _resume_mutation(job_id, "sync")
 
     return app
 

@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentic workflow runtime tracker",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "release_version",
+    "objective",
+    "state",
+    "current_step",
+    "planned_steps",
+    "completed_steps",
+    "gates",
+    "pause_conditions",
+    "validation",
+    "branch",
+    "pull_request",
+    "artifacts",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "workflow_id": { "type": "string", "minLength": 1 },
+    "release_version": { "type": "string", "minLength": 1 },
+    "target_version": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "objective": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["running", "paused", "complete", "blocked"]
+    },
+    "current_step": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "planned_steps": { "type": "array" },
+    "attempted_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step_id", "attempted_at", "note", "evidence"],
+        "properties": {
+          "step_id": { "type": "string", "minLength": 1 },
+          "attempted_at": { "type": "string", "minLength": 1 },
+          "note": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "completed_steps": { "type": "array" },
+    "evidence_routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "step_id",
+          "title",
+          "status",
+          "execution_mode",
+          "artifact_path",
+          "summary",
+          "findings",
+          "recommendation",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "route_id": { "type": "string", "minLength": 1 },
+          "step_id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["running", "complete", "failed"]
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": ["subagent", "local_fallback"]
+          },
+          "prompt_path": { "type": "string" },
+          "prompt_summary": { "type": "string" },
+          "artifact_path": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string" },
+          "findings": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "recommendation": { "type": "string" },
+          "error": { "type": "string" },
+          "created_at": { "type": "string", "minLength": 1 },
+          "updated_at": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "gates": { "type": "array" },
+    "pause_conditions": { "type": "array" },
+    "validation": { "type": "array" },
+    "branch": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "plan_path": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "plan_revision": {
+      "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }]
+    },
+    "plan_digest": {
+      "anyOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "bootstrap_commit": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "pull_request": {
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "artifacts": { "type": "array" },
+    "artifact_manifests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "manifest_id", "step_id", "storage_root", "recorded_at"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "manifest_id": { "type": "string", "minLength": 1 },
+          "step_id": { "type": "string", "minLength": 1 },
+          "storage_root": {
+            "type": "string",
+            "enum": ["repo", "external"]
+          },
+          "recorded_at": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

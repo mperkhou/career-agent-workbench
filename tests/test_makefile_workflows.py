@@ -52,6 +52,49 @@ def _dry_run(target: str, *variables: str) -> str:
     return completed.stdout
 
 
+def test_setup_targets_use_one_public_venv_and_explicit_chromium_install() -> None:
+    venv = _dry_run("venv")
+    browser = _dry_run("install-browser")
+    assert 'python3 -m venv ".venv"' in venv
+    assert '.venv/bin/python -m pip install -e ".[dev,browser]"' in venv
+    assert ".venv/bin/python -m playwright install chromium" in browser
+    assert "curl" not in browser
+    assert "ollama" not in browser.casefold()
+
+
+def test_operator_targets_use_public_venv_and_exact_bounded_helpers() -> None:
+    linked = _dry_run("skill-link", "CODEX_SKILLS_DIR=temporary-skills")
+    assert (
+        ".venv/bin/python scripts/workbench_operator.py skills link --destination "
+        '"temporary-skills"'
+    ) in linked
+
+    started = _dry_run("start-website")
+    assert ".venv/bin/python scripts/workbench_operator.py website start" in started
+    assert "--open-browser" not in started
+    assert "lsof" not in started
+    assert "kill" not in started
+
+    opted_in = _dry_run("start-website", "OPEN_BROWSER=true")
+    assert opted_in.count("--open-browser") == 1
+    stopped = _dry_run("stop-website")
+    assert (
+        stopped.strip() == ".venv/bin/python scripts/workbench_operator.py website stop"
+    )
+
+
+def test_public_commands_resolve_from_public_venv() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    for command in (
+        "career-agent-workbench-seed-jobs",
+        "career-agent-workbench-audit-jods",
+        "career-agent-workbench-refine-resume",
+        "career-agent-workbench-webapp",
+    ):
+        assert f"$(VENV)/bin/{command}" in makefile
+    assert "PYTHON ?= $(VENV_PYTHON)" in makefile
+
+
 @pytest.mark.parametrize("target", STATEFUL_TARGETS)
 def test_default_stateful_make_targets_emit_no_private_state(target: str) -> None:
     output = _dry_run(target)

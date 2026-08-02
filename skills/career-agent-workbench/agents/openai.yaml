@@ -1,0 +1,4 @@
+interface:
+  display_name: "Career Agent Workbench"
+  short_description: "Operate the local public-code/private-state career workbench."
+  default_prompt: "Use $career-agent-workbench to configure or operate the local Career Agent Workbench safely."

@@ -1,11 +1,17 @@
-PYTHON ?= python3
-SEED_JOBS ?= career-agent-workbench-seed-jobs
-AUDIT_JODS ?= career-agent-workbench-audit-jods
-REFINE_RESUME ?= career-agent-workbench-refine-resume
-WEBAPP ?= career-agent-workbench-webapp
+SYSTEM_PYTHON ?= python3
+VENV ?= .venv
+VENV_PYTHON := $(VENV)/bin/python
+PYTHON ?= $(VENV_PYTHON)
+SEED_JOBS ?= $(VENV)/bin/career-agent-workbench-seed-jobs
+AUDIT_JODS ?= $(VENV)/bin/career-agent-workbench-audit-jods
+REFINE_RESUME ?= $(VENV)/bin/career-agent-workbench-refine-resume
+WEBAPP ?= $(VENV)/bin/career-agent-workbench-webapp
+CODEX_SKILLS_DIR ?= $(HOME)/.codex/skills
+CONSOLE_SCRIPTS := career-agent-workbench career-agent-workbench-audit-jods career-agent-workbench-refine-resume career-agent-workbench-seed-jobs career-agent-workbench-webapp career-agent-workbench-mcp
 
 HOST ?= 127.0.0.1
 PORT ?= 8765
+OPEN_BROWSER ?=
 
 WORKSPACE ?=
 DATABASE ?=
@@ -65,15 +71,36 @@ first_draft_force_flag = $(if $(filter 1 true,$(strip $(FIRST_DRAFT_FORCE))),--f
 highlight_span_flag = $(if $(strip $(HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET)),--max-strong-spans-per-bullet "$(HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET)")
 highlight_company_flag = $(if $(strip $(HIGHLIGHT_EXPERIENCE_COMPANY)),--experience-company "$(HIGHLIGHT_EXPERIENCE_COMPANY)")
 highlight_job_order_flag = $(if $(strip $(HIGHLIGHT_EXPERIENCE_JOB_ORDER)),--experience-job-order "$(HIGHLIGHT_EXPERIENCE_JOB_ORDER)")
+open_browser_flag = $(if $(filter 1 true,$(strip $(OPEN_BROWSER))),--open-browser)
 
-.PHONY: help env test lint format-check seed-jobs audit-jods \
+.PHONY: help install venv install-browser console-scripts skill-link env test lint format-check seed-jobs audit-jods \
 	generate-draft-resumes regenerate-draft-resumes regenerate-resumes \
 	regenerate-resume-variants regenerate-aro-objects sync-draft-to-aro \
 	refine-draft-resumes second-pass-refinement highlight-draft-resumes \
-	manual-pass-resumes launch-website demo
+	manual-pass-resumes launch-website start-website stop-website restart-website demo
 
 help:
-	@echo "Public-safe CLI, script, demo, test, and lint targets"
+	@echo "Public-safe setup, operator, CLI, demo, test, and lint targets"
+
+install: venv install-browser
+
+venv: $(VENV)/.installed
+
+$(VENV)/.installed: pyproject.toml
+	$(SYSTEM_PYTHON) -m venv "$(VENV)"
+	$(VENV_PYTHON) -m pip install -e ".[dev,browser]"
+	@touch "$(VENV)/.installed"
+
+install-browser: venv
+	$(VENV_PYTHON) -m playwright install chromium
+
+console-scripts:
+	@for command in $(CONSOLE_SCRIPTS); do \
+		test -x "$(VENV)/bin/$$command" || exit 1; \
+	done
+
+skill-link:
+	$(VENV_PYTHON) scripts/workbench_operator.py skills link --destination "$(CODEX_SKILLS_DIR)"
 
 env:
 	$(PYTHON) --version
@@ -122,6 +149,15 @@ manual-pass-resumes:
 
 launch-website:
 	$(WEBAPP) $(workspace_flag) $(database_flag) $(output_flag) $(profile_flag) $(master_flag) $(master_text_flag) $(blacklist_flag) $(tmp_flag) --host "$(HOST)" --port "$(PORT)"
+
+start-website:
+	$(VENV_PYTHON) scripts/workbench_operator.py website start --host "$(HOST)" --port "$(PORT)" $(open_browser_flag)
+
+stop-website:
+	$(VENV_PYTHON) scripts/workbench_operator.py website stop
+
+restart-website: stop-website
+	$(MAKE) start-website HOST="$(HOST)" PORT="$(PORT)" OPEN_BROWSER="$(OPEN_BROWSER)"
 
 demo:
 	$(PYTHON) scripts/create_demo_workspace.py --source examples/demo-workspace --workspace "$(DEMO_WORKSPACE)"

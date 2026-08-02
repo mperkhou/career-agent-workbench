@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Workflow Controller"
+  short_description: "Execute or resume committed workflow plans."
+  default_prompt: "Use $agentic-workflow-controller to resume a committed, digest-bound workflow at its current P step or G gate."

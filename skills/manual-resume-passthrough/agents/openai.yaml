@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manual Resume Passthrough"
+  short_description: "Review and store one grounded manual resume variant."
+  default_prompt: "Use $manual-resume-passthrough for a grounded manual pass on the explicitly selected application row."

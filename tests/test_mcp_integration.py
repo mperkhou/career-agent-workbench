@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 import sys
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.fastmcp.exceptions import ToolError
 
 from career_agent_workbench import config as config_module
@@ -212,6 +215,34 @@ def test_tool_names_and_schemas_are_business_only() -> None:
         "tmp_dir",
     ):
         assert state_name not in rendered
+
+
+def test_injected_offline_stdio_handshake_lists_exact_tools(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+
+    async def exercise() -> tuple[str, ...]:
+        environment = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": str(project_root / "src"),
+        }
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "career_agent_workbench.server"],
+            env=environment,
+            cwd=tmp_path,
+        )
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                result = await session.list_tools()
+                return tuple(sorted(tool.name for tool in result.tools))
+
+    assert asyncio.run(exercise()) == (
+        "find_matching_linkedin_jobs",
+        "get_linkedin_job_details",
+        "get_linkedin_job_raw_payload",
+        "search_linkedin_jobs",
+    )
 
 
 def test_exclusion_outer_bound_rejects_duplicates_before_service() -> None:

@@ -8,11 +8,11 @@ import threading
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 
 from career_agent_workbench.application_state import ApplicationStateStore
 from career_agent_workbench.cli_paths import (
@@ -21,6 +21,15 @@ from career_agent_workbench.cli_paths import (
     load_command_config,
 )
 from career_agent_workbench.config import RuntimeConfig, WorkspaceMember, WorkspacePaths
+from career_agent_workbench.webapp_tracker import (
+    TRACKER_DIRECTIONS,
+    TRACKER_SORTS,
+    TRACKER_STATUSES,
+    TrackerView,
+    TrackerViewError,
+    tracker_applications,
+    tracker_counts,
+)
 
 
 CommandExecutor = Callable[[Sequence[str]], int]
@@ -226,6 +235,25 @@ def _selected_job_ids(values: Sequence[str]) -> tuple[str, ...] | None:
     return tuple(selected)
 
 
+def _tracker_view(*, form: bool = False) -> TrackerView:
+    return TrackerView.parse(
+        request.form if form else request.args, prefix="view_" if form else ""
+    )
+
+
+def _date_applied(value: str) -> str | None:
+    selected = value.strip()
+    if not selected:
+        return None
+    try:
+        parsed = date.fromisoformat(selected)
+    except ValueError:
+        raise ValueError from None
+    if parsed.isoformat() != selected:
+        raise ValueError
+    return selected
+
+
 def create_app(
     runtime: RuntimeConfig,
     *,
@@ -253,20 +281,74 @@ def create_app(
 
     @app.get("/")
     def index():
-        scope = request.args.get("scope", "active")
-        if scope not in {"active", "archived", "all"}:
-            return "Application scope is invalid.", 400
         try:
-            applications = store.list_applications(scope)
+            view = _tracker_view()
+            applications = tracker_applications(store, view)
+        except TrackerViewError:
+            return "Application scope is invalid.", 400
         except Exception:  # noqa: BLE001 - keep store failures content-free.
             return "Tracker data is unavailable.", 503
         return render_template(
             "webapp/index.html",
             applications=applications,
-            scope=scope,
+            view=view,
+            counts=tracker_counts(applications),
+            tracker_statuses=TRACKER_STATUSES,
+            tracker_sorts=TRACKER_SORTS,
+            tracker_directions=TRACKER_DIRECTIONS,
             targets=ACTION_TARGETS,
             actions=_action_snapshots(extension["actions"]),
         )
+
+    @app.post("/applications/<job_id>")
+    def update_application(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            if "applied_to" not in request.form or "date_applied" not in request.form:
+                raise ValueError
+            if "notes" not in request.form:
+                raise ValueError
+            store.update_application_status(
+                job_id,
+                applied_to=request.form["applied_to"],
+                date_applied=_date_applied(request.form["date_applied"]),
+                notes=request.form["notes"],
+            )
+        except Exception:  # noqa: BLE001 - mutation errors stay content-free.
+            return "Application update is invalid.", 400
+        return redirect(view.index_url)
+
+    def _bulk_mutation(operation: str):
+        try:
+            view = _tracker_view(form=True)
+            job_ids = _selected_job_ids(request.form.getlist("job_id"))
+            if job_ids is None:
+                raise ValueError
+            if operation == "archive":
+                store.archive(job_ids)
+            elif operation == "unarchive":
+                store.unarchive(job_ids)
+            elif (
+                operation == "delete" and request.form.get("confirm_delete") == "delete"
+            ):
+                store.delete(job_ids)
+            else:
+                raise ValueError
+        except Exception:  # noqa: BLE001 - mutation errors stay content-free.
+            return "Application mutation is invalid.", 400
+        return redirect(view.index_url)
+
+    @app.post("/applications/archive")
+    def archive_applications():
+        return _bulk_mutation("archive")
+
+    @app.post("/applications/unarchive")
+    def unarchive_applications():
+        return _bulk_mutation("unarchive")
+
+    @app.post("/applications/delete")
+    def delete_applications():
+        return _bulk_mutation("delete")
 
     @app.post("/actions/run")
     def run_action():

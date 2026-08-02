@@ -331,24 +331,14 @@ def recalculate_selected_ats(
         prompt = usable_job_description(record.prompt_job_description)
         source = usable_job_description(record.job_description)
         job_description = prompt or source
-        if (
-            job_description is None
-            or record.resume_pdf is None
-            or record.job_description is None
-            or record.prompt_job_description is None
-        ):
+        if job_description is None or record.resume_pdf is None:
             skipped += 1
             continue
         diagnostics = calculate_ats_diagnostics(
             resume_pdf=record.resume_pdf,
             job_description=job_description,
         )
-        store.store_jod(
-            record.job_id,
-            source_text=record.job_description,
-            prompt_text=record.prompt_job_description,
-            ats=_ats_fields(diagnostics),
-        )
+        store.store_ats(record.job_id, _ats_fields(diagnostics))
         updated += 1
     return AtsRecalculationResult(updated=updated, skipped=skipped)
 

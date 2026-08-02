@@ -1359,6 +1359,178 @@ def test_jod_refresh_updates_ats_on_selected_variant_atomically(tmp_path: Path) 
     assert application_score == 91
 
 
+def test_store_ats_updates_only_application_fallback(tmp_path: Path) -> None:
+    store, _ = _initialize_with_application(tmp_path)
+    store.store_jod(
+        JOB_ONE,
+        source_text="Synthetic source JOD.",
+        prompt_text="Synthetic prompt JOD.",
+    )
+    store.store_aro(
+        JOB_ONE,
+        yaml_text=ARO_V1,
+        backup_yaml_text="profile:\n  summary: Synthetic backup\n",
+    )
+    store.store_clo(
+        JOB_ONE,
+        value={"letter": "Synthetic cover letter"},
+        pdf_content=b"synthetic-cover-pdf",
+    )
+    store.store_application_artifacts(
+        JOB_ONE,
+        resume_html="<main>Synthetic fallback</main>",
+        resume_pdf=b"synthetic-fallback-pdf",
+        ats=AtsFields(score=12, missing_terms="stale"),
+    )
+    store.update_application_status(
+        JOB_ONE,
+        applied_to="Yes",
+        date_applied="2035-02-04",
+        notes="Synthetic operator note",
+    )
+    store.archive([JOB_ONE])
+    before = store.get_application(JOB_ONE)
+    refreshed = AtsFields(
+        score=93,
+        parsing_score=94,
+        keyword_score=92,
+        semantic_score=91,
+        formatting_risk="low",
+        missing_terms="bounded-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    after = store.store_ats(JOB_ONE, refreshed)
+
+    assert after.selected_variant is None
+    assert after.ats.score == 93
+    assert after.ats.diagnostics["refreshed"] is True
+    assert after.updated_at != before.updated_at
+    assert (
+        replace(
+            after,
+            ats=before.ats,
+            updated_at=before.updated_at,
+        )
+        == before
+    )
+    with pytest.raises(ApplicationStateValidationError):
+        store.store_ats("", refreshed)
+    with pytest.raises(ApplicationStateValidationError):
+        store.store_ats(JOB_ONE, object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("manual_selection", "selected_key"),
+    ((False, "v2"), (True, "v1")),
+)
+def test_store_ats_updates_only_selected_variant_and_projection(
+    tmp_path: Path,
+    *,
+    manual_selection: bool,
+    selected_key: str,
+) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.store_jod(
+        JOB_ONE,
+        source_text="Synthetic source JOD.",
+        prompt_text="Synthetic prompt JOD.",
+    )
+    store.store_aro(
+        JOB_ONE,
+        yaml_text=ARO_V1,
+        backup_yaml_text="profile:\n  summary: Synthetic backup\n",
+    )
+    store.store_clo(
+        JOB_ONE,
+        value={"letter": "Synthetic cover letter"},
+        pdf_content=b"synthetic-cover-pdf",
+    )
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.upsert_resume_variant(JOB_ONE, _variant("v2", parent="v1"))
+    if manual_selection:
+        store.select_resume_variant(JOB_ONE, "v1")
+    store.update_application_status(
+        JOB_ONE,
+        applied_to="Yes",
+        date_applied="2035-02-04",
+        notes="Synthetic operator note",
+    )
+    store.archive([JOB_ONE])
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            UPDATE applications
+            SET aro_yaml = ?, application_resume_object = ?,
+                resume_html_content = ?, resume_content = ?
+            WHERE job_id = ?
+            """,
+            (
+                "profile:\n  summary: Stale synthetic projection\n",
+                "profile:\n  summary: Stale synthetic projection\n",
+                "<main>Stale synthetic projection</main>",
+                b"stale-synthetic-projection",
+                JOB_ONE,
+            ),
+        )
+    before = store.get_application(JOB_ONE)
+    variants_before = {
+        variant.variant_key: variant for variant in store.list_resume_variants(JOB_ONE)
+    }
+    refreshed = AtsFields(
+        score=93,
+        parsing_score=94,
+        keyword_score=92,
+        semantic_score=91,
+        formatting_risk="low",
+        missing_terms="bounded-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    after = store.store_ats(JOB_ONE, refreshed)
+    variants_after = {
+        variant.variant_key: variant for variant in store.list_resume_variants(JOB_ONE)
+    }
+
+    assert before.selected_resume_variant == selected_key
+    assert after.selected_resume_variant == selected_key
+    assert after.resume_variant_selection_mode == (
+        "manual" if manual_selection else "auto"
+    )
+    assert after.ats.score == 93
+    assert after.selected_variant is not None
+    assert after.selected_variant.ats.score == 93
+    assert after.application_resume == before.application_resume
+    assert after.resume_html == before.resume_html
+    assert after.resume_pdf == before.resume_pdf
+    assert (
+        replace(
+            after,
+            ats=before.ats,
+            selected_variant=before.selected_variant,
+            updated_at=before.updated_at,
+        )
+        == before
+    )
+    for key, variant_before in variants_before.items():
+        variant_after = variants_after[key]
+        if key != selected_key:
+            assert variant_after == variant_before
+            continue
+        assert variant_after.ats.score == 93
+        assert (
+            replace(
+                variant_after,
+                ats=variant_before.ats,
+                ats_diagnostics=variant_before.ats_diagnostics,
+                updated_at=variant_before.updated_at,
+            )
+            == variant_before
+        )
+
+
 def test_metadata_refresh_preserves_dedicated_state(tmp_path: Path) -> None:
     store, _ = _initialize_with_application(tmp_path)
     store.store_jod(JOB_ONE, source_text="source", prompt_text="prompt")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -293,6 +295,34 @@ def test_explicit_ats_recalculation_updates_selected_projection_and_skips_safely
             resume_pdf=_pdf_bytes("no-jod"),
         ),
     )
+    for job_id in ("prompt-job", "source-fallback-job"):
+        store.store_clo(
+            job_id,
+            value={"letter": "Synthetic cover letter"},
+            pdf_content=b"synthetic-cover-pdf",
+        )
+        store.update_application_status(
+            job_id,
+            applied_to="Yes",
+            date_applied="2035-02-04",
+            notes="Synthetic operator note",
+        )
+    store.archive(["prompt-job", "source-fallback-job"])
+    with sqlite3.connect(paths.database) as connection:
+        connection.execute(
+            """
+            UPDATE applications SET job_description = NULL
+            WHERE job_id = ?
+            """,
+            ("prompt-job",),
+        )
+        connection.execute(
+            """
+            UPDATE applications SET prompt_job_description = NULL
+            WHERE job_id = ?
+            """,
+            ("source-fallback-job",),
+        )
     before = {
         job_id: store.get_application(job_id)
         for job_id in ("prompt-job", "source-fallback-job")
@@ -301,6 +331,14 @@ def test_explicit_ats_recalculation_updates_selected_projection_and_skips_safely
         job_id: store.list_resume_variants(job_id)
         for job_id in ("prompt-job", "source-fallback-job")
     }
+    skipped_before = {
+        job_id: store.get_application(job_id) for job_id in ("no-pdf-job", "no-jod-job")
+    }
+    assert before["prompt-job"].job_description is None
+    assert before["prompt-job"].prompt_job_description == prompt_description
+    assert before["prompt-job"].resume_variant_selection_mode == "auto"
+    assert before["source-fallback-job"].prompt_job_description is None
+    assert before["source-fallback-job"].job_description is not None
     assert before["source-fallback-job"].resume_variant_selection_mode == "manual"
 
     response = app.test_client().post(
@@ -335,17 +373,28 @@ def test_explicit_ats_recalculation_updates_selected_projection_and_skips_safely
         )
         assert after.job_description == original.job_description
         assert after.prompt_job_description == original.prompt_job_description
-        assert after.application_resume == original.application_resume
-        assert after.resume_html == original.resume_html
-        assert after.resume_pdf == original.resume_pdf
+        assert (
+            replace(
+                after,
+                ats=original.ats,
+                selected_variant=original.selected_variant,
+                updated_at=original.updated_at,
+            )
+            == original
+        )
         variant_after = store.list_resume_variants(job_id)[0]
         variant_before = variants_before[job_id][0]
-        assert variant_after.application_resume == variant_before.application_resume
-        assert variant_after.resume_html == variant_before.resume_html
-        assert variant_after.resume_pdf == variant_before.resume_pdf
-        assert variant_after.parent_variant_key == variant_before.parent_variant_key
-    assert store.get_application("no-pdf-job").ats.score is None
-    assert store.get_application("no-jod-job").ats.score is None
+        assert (
+            replace(
+                variant_after,
+                ats=variant_before.ats,
+                ats_diagnostics=variant_before.ats_diagnostics,
+                updated_at=variant_before.updated_at,
+            )
+            == variant_before
+        )
+    assert store.get_application("no-pdf-job") == skipped_before["no-pdf-job"]
+    assert store.get_application("no-jod-job") == skipped_before["no-jod-job"]
 
 
 def test_registry_history_is_bounded_and_app_registries_stay_isolated(

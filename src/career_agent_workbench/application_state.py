@@ -930,6 +930,45 @@ class ApplicationStateStore:
 
         return self._write(write)
 
+    def store_ats(self, job_id: str, ats: AtsFields) -> ApplicationRecord:
+        """Persist only caller-supplied ATS fields for the active projection."""
+
+        validated_id = _identifier(job_id)
+        ats_values = _ats(ats)
+        now = self._timestamp()
+
+        def write(connection: sqlite3.Connection) -> ApplicationRecord:
+            application = self._require_application(connection, validated_id)
+            selected = _stored_variant_key(application["selected_resume_variant"])
+            if selected is not None:
+                cursor = connection.execute(
+                    """
+                    UPDATE application_resume_variants
+                    SET ats_score = ?, ats_parsing_score = ?, ats_keyword_score = ?,
+                        ats_semantic_score = ?, ats_formatting_risk = ?,
+                        ats_missing_terms = ?, ats_updated_at = ?,
+                        ats_diagnostics_json = ?, updated_at = ?
+                    WHERE job_id = ? AND variant_key = ?
+                    """,
+                    (*ats_values, now, validated_id, selected),
+                )
+                if cursor.rowcount != 1:
+                    raise _MissingRecord
+            connection.execute(
+                """
+                UPDATE applications
+                SET ats_score = ?, ats_parsing_score = ?, ats_keyword_score = ?,
+                    ats_semantic_score = ?, ats_formatting_risk = ?,
+                    ats_missing_terms = ?, ats_updated_at = ?,
+                    ats_diagnostics_json = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (*ats_values, now, validated_id),
+            )
+            return self._load_application(connection, validated_id)
+
+        return self._write(write)
+
     def load_query_outcomes(
         self,
         *,

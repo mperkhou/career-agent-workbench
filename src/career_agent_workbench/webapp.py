@@ -21,6 +21,16 @@ from career_agent_workbench.cli_paths import (
     load_command_config,
 )
 from career_agent_workbench.config import RuntimeConfig, WorkspaceMember, WorkspacePaths
+from career_agent_workbench.webapp_ingestion import (
+    GenericHtmlFetcher,
+    LinkedInDetailsFetcher,
+    WebIngestionError,
+    fetch_generic_html,
+    fetch_linkedin_details,
+    ingest_generic_urls,
+    ingest_linkedin_urls,
+    parse_job_url_batch,
+)
 from career_agent_workbench.webapp_tracker import (
     TRACKER_DIRECTIONS,
     TRACKER_SORTS,
@@ -155,10 +165,17 @@ def _action_snapshots(registry: _ActionRegistry) -> list[dict[str, object]]:
         ]
 
 
-def _create_action(registry: _ActionRegistry, *, target: str) -> _ActionRecord:
+def _create_action(
+    registry: _ActionRegistry,
+    *,
+    target: str | None = None,
+    label: str | None = None,
+) -> _ActionRecord:
+    if (target is None) == (label is None):
+        raise ValueError("Action label is invalid.")
     record = _ActionRecord(
         action_id=uuid.uuid4().hex,
-        target_label=ACTION_TARGETS[target],
+        target_label=ACTION_TARGETS[target] if target is not None else str(label),
         status="queued",
         queued_at=_timestamp(),
     )
@@ -219,6 +236,34 @@ def _make_argv(
     return tuple(argv)
 
 
+def _seed_argv(
+    *,
+    project_root: Path,
+    location: str,
+    date_posted: str,
+    limit_per_query: int,
+    max_queries: int,
+    max_jobs: int,
+    paths: WorkspacePaths,
+) -> tuple[str, ...]:
+    argv = [
+        "make",
+        "-C",
+        str(project_root),
+        "seed-jobs",
+        f"LOCATION={location}",
+        f"DATE_POSTED={date_posted}",
+        f"LIMIT_PER_QUERY={limit_per_query}",
+        f"MAX_QUERIES={max_queries}",
+        f"MAX_JOBS={max_jobs}",
+    ]
+    for member, assignment in _PATH_ASSIGNMENTS:
+        value = getattr(paths, member)
+        if value is not None:
+            argv.append(f"{assignment}={value}")
+    return tuple(argv)
+
+
 def _selected_job_ids(values: Sequence[str]) -> tuple[str, ...] | None:
     if not values:
         return None
@@ -254,11 +299,42 @@ def _date_applied(value: str) -> str | None:
     return selected
 
 
+def _seed_request() -> tuple[str, str, int, int, int]:
+    location = str(request.form.get("location") or "").strip()
+    date_posted = str(request.form.get("date_posted") or "")
+    if (
+        not location
+        or len(location) > 256
+        or any(ord(character) < 32 for character in location)
+        or date_posted not in {"any_time", "past_24_hours", "past_week", "past_month"}
+    ):
+        raise ValueError
+    return (
+        location,
+        date_posted,
+        _bounded_form_integer("limit_per_query", upper=100),
+        _bounded_form_integer("max_queries", upper=100),
+        _bounded_form_integer("max_jobs", upper=50),
+    )
+
+
+def _bounded_form_integer(name: str, *, upper: int) -> int:
+    value = request.form.get(name)
+    if type(value) is not str or not value.isascii() or not value.isdigit():
+        raise ValueError
+    selected = int(value)
+    if not 1 <= selected <= upper:
+        raise ValueError
+    return selected
+
+
 def create_app(
     runtime: RuntimeConfig,
     *,
     command_executor: CommandExecutor | None = None,
     project_root: Path | None = None,
+    linkedin_details_fetcher: LinkedInDetailsFetcher | None = None,
+    generic_html_fetcher: GenericHtmlFetcher | None = None,
 ) -> Flask:
     """Create one app from an already-resolved immutable runtime."""
 
@@ -278,6 +354,20 @@ def create_app(
         "actions": _ActionRegistry(),
     }
     app.extensions[_EXTENSION_KEY] = extension
+    linkedin_fetcher = linkedin_details_fetcher or (
+        lambda url: fetch_linkedin_details(
+            url,
+            user_agent=runtime.settings.user_agent,
+            timeout_seconds=runtime.settings.timeout_seconds,
+        )
+    )
+    generic_fetcher = generic_html_fetcher or (
+        lambda url: fetch_generic_html(
+            url,
+            user_agent=runtime.settings.user_agent,
+            timeout_seconds=runtime.settings.timeout_seconds,
+        )
+    )
 
     @app.get("/")
     def index():
@@ -349,6 +439,91 @@ def create_app(
     @app.post("/applications/delete")
     def delete_applications():
         return _bulk_mutation("delete")
+
+    @app.get("/applications/add")
+    def add_applications():
+        try:
+            view = _tracker_view()
+        except TrackerViewError:
+            return "Add view is invalid.", 400
+        return render_template("webapp/add.html", view=view)
+
+    @app.post("/applications/add/seed")
+    def seed_applications():
+        try:
+            _tracker_view(form=True)
+            location, date_posted, limit_per_query, max_queries, max_jobs = (
+                _seed_request()
+            )
+            bound_root = extension["project_root"]
+            if bound_root is None or not (bound_root / "Makefile").is_file():
+                return jsonify(
+                    message="Seed action is unavailable.", status="rejected"
+                ), 503
+            argv = _seed_argv(
+                project_root=bound_root,
+                location=location,
+                date_posted=date_posted,
+                limit_per_query=limit_per_query,
+                max_queries=max_queries,
+                max_jobs=max_jobs,
+                paths=paths,
+            )
+            registry = extension["actions"]
+            action = _create_action(registry, label="Seed and match jobs")
+            thread = threading.Thread(
+                target=_run_action,
+                args=(registry, action.action_id, extension["executor"], argv),
+                daemon=True,
+            )
+            thread.start()
+        except Exception:  # noqa: BLE001 - request failures stay content-free.
+            return jsonify(message="Seed request is invalid.", status="rejected"), 400
+        return jsonify(action_id=action.action_id, status="accepted"), 202
+
+    def _ingestion_response(*, linkedin: bool):
+        try:
+            _tracker_view(form=True)
+            field = "linkedin_urls" if linkedin else "other_urls"
+            batch = parse_job_url_batch(request.form.get(field), linkedin=linkedin)
+            result = (
+                ingest_linkedin_urls(
+                    store=store,
+                    batch=batch,
+                    fetcher=linkedin_fetcher,
+                )
+                if linkedin
+                else ingest_generic_urls(
+                    store=store,
+                    batch=batch,
+                    html_fetcher=generic_fetcher,
+                )
+            )
+        except WebIngestionError:
+            return jsonify(message="URL ingestion is invalid.", status="rejected"), 400
+        except Exception:  # noqa: BLE001 - request failures stay content-free.
+            return jsonify(message="URL ingestion failed.", status="rejected"), 400
+        status = "accepted" if result.failed == 0 else "partial"
+        response_code = 200 if result.accepted else 422
+        return (
+            jsonify(
+                accepted=result.accepted,
+                created=result.created,
+                failed=result.failed,
+                message="URL ingestion completed.",
+                refreshed=result.refreshed,
+                status=status if result.accepted else "rejected",
+            ),
+            response_code,
+        )
+
+    @app.post("/applications/add/linkedin")
+    def add_linkedin_applications():
+        return _ingestion_response(linkedin=True)
+
+    @app.post("/applications/add/other")
+    def add_generic_applications():
+        return _ingestion_response(linkedin=False)
 
     @app.post("/actions/run")
     def run_action():

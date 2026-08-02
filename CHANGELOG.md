@@ -8,6 +8,10 @@
   approved v1.2.0 capability gaps; implementation remains separately gated.
 - Added bounded legacy/public Chromium comparisons and read-only gate evidence
   routes for each approved parity slice.
+- Amended the v1.2.0 workflow evidence lifecycle to retain sealed external run
+  evidence only through its matching gate, use fresh clones from one immutable
+  digest-bound setup baseline, and delete content-bearing evidence promptly
+  after review or immediately when retention becomes unsafe.
 
 ## [1.1.0] - 2026-08-02
 

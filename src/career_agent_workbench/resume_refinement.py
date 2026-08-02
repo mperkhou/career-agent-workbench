@@ -281,8 +281,12 @@ class ResumeEvidenceSnapshot:
 class ResumePatchTarget:
     """One allowlisted exact ARO text target."""
 
-    section: Literal["professional_summary", "professional_experience"]
-    field: Literal["paragraph", "text"]
+    section: Literal[
+        "professional_summary",
+        "professional_experience",
+        "core_technical_skills",
+    ]
+    field: Literal["paragraph", "text", "items"]
     job_order: str | None
     bullet_order: str | None
 
@@ -290,6 +294,8 @@ class ResumePatchTarget:
     def target_id(self) -> str:
         if self.section == "professional_summary":
             return f"summary:{self.field}"
+        if self.section == "core_technical_skills":
+            return f"skills:{self.job_order}:items"
         return f"experience:{self.job_order}:bullet:{self.bullet_order}"
 
 
@@ -298,7 +304,11 @@ class ResumePatch:
     """One exact-target, evidence-referenced proposed rewrite."""
 
     change_id: str
-    operation: Literal["rewrite_summary", "rewrite_bullet"]
+    operation: Literal[
+        "rewrite_summary",
+        "rewrite_bullet",
+        "replace_skill_items",
+    ]
     target: ResumePatchTarget
     current_text: str = field(repr=False)
     proposed_text: str = field(repr=False)
@@ -505,9 +515,13 @@ def read_resume_evidence_snapshot(paths: WorkspacePaths) -> ResumeEvidenceSnapsh
 
 def collect_resume_patch_targets(
     application_resume: Mapping[str, Any],
+    *,
+    include_skill_targets: bool = False,
 ) -> tuple[_ResumeTarget, ...]:
     """Collect summary and rendered bullet targets with stable exact identities."""
 
+    if type(include_skill_targets) is not bool:
+        raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
     resume = _clone_resume(application_resume)
     targets: list[_ResumeTarget] = []
     seen: set[str] = set()
@@ -540,6 +554,9 @@ def collect_resume_patch_targets(
                 )
             )
             seen.add(target.target_id)
+
+    if include_skill_targets:
+        _collect_skill_patch_targets(resume, targets, seen)
 
     experience = resume.get("professional_experience")
     jobs = experience.get("jobs") if type(experience) is dict else None
@@ -604,6 +621,90 @@ def collect_resume_patch_targets(
     return tuple(targets)
 
 
+def _collect_skill_patch_targets(
+    resume: dict[str, Any],
+    targets: list[_ResumeTarget],
+    seen: set[str],
+) -> None:
+    skills = resume.get("core_technical_skills")
+    categories = skills.get("bullet_points") if type(skills) is dict else None
+    if categories is None:
+        return
+    if type(categories) is not list:
+        raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+    for category_index, category in enumerate(categories):
+        if type(category) is not dict or not _is_rendered(category):
+            continue
+        category_name = category.get("category")
+        items = category.get("items")
+        if (
+            type(category_name) is not str
+            or not category_name
+            or type(items) is not dict
+        ):
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        _validate_text(category_name, max_chars=1_024)
+        visible = _visible_skill_items(items)
+        if not visible:
+            continue
+        target = ResumePatchTarget(
+            section="core_technical_skills",
+            field="items",
+            job_order=str(category_index + 1),
+            bullet_order=None,
+        )
+        if target.target_id in seen:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        seen.add(target.target_id)
+        targets.append(
+            _ResumeTarget(
+                target=target,
+                text=_serialize_skill_items(visible),
+                role_id="mro:skills",
+                employer="Canonical MRO",
+                role=category_name,
+                location=(
+                    "core_technical_skills",
+                    "bullet_points",
+                    category_index,
+                    "items",
+                ),
+            )
+        )
+
+
+def _visible_skill_items(items: dict[str, Any]) -> dict[str, list[str]]:
+    visible: dict[str, list[str]] = {}
+    for key in ("primary", "additional"):
+        values = items.get(key)
+        if values is None:
+            continue
+        if type(values) is not list or len(values) > MAX_JSON_COLLECTION_ITEMS:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        parsed: list[str] = []
+        for value in values:
+            if type(value) is not str:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            parsed.append(
+                _bounded_plain_string(
+                    value,
+                    max_chars=1_024,
+                    allow_empty=False,
+                )
+            )
+        visible[key] = parsed
+    return visible
+
+
+def _serialize_skill_items(items: Mapping[str, list[str]]) -> str:
+    return json.dumps(
+        dict(items),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def build_resume_patch_prompt(
     *,
     workflow: Literal["refinement", "manual"],
@@ -660,10 +761,27 @@ def build_resume_patch_prompt(
         if additional_context is not None
         else None,
     }
+    manual_skill_policy = (
+        " For manual skill targets, replace only the rendered primary/additional "
+        "item lists represented by the exact current_text JSON object; preserve "
+        "category identity and non-rendered metadata. Keep pruning and "
+        "de-duplicating the skills section to avoid bloat; do not copy v2's skills "
+        "section wholesale. While pruning, preserve or include DevOps, Scalability, "
+        "CI/CD pipelines, cloud environments, and GitHub Actions when the term is "
+        "already present in v2 or requested by the JOD and supported by MRO/ARO "
+        "evidence. Rewrite inflated surrounding wording truthfully while retaining "
+        "only supported terms; never retain an unsupported claim merely to retain a "
+        "term. Use operation replace_skill_items, section core_technical_skills, "
+        "field items, the supplied job_order, null bullet_order, and JSON-encoded "
+        "current_text/proposed_text objects with the same list keys."
+        if workflow == "manual"
+        else ""
+    )
     prompt = (
         "Return only one strict JSON object. Propose patch objects, never a full "
-        "resume. Only rewrite an existing professional summary or an existing "
-        "professional-experience bullet. Preserve target identity, ordering, and "
+        "resume. Only rewrite an existing professional summary, an existing "
+        "professional-experience bullet, or an explicitly supplied manual skill "
+        "target. Preserve target identity, ordering, and "
         "topology. Every change must cite canonical_mro_evidence IDs. A bullet may "
         "cite only evidence with the exact same canonical role_id, employer, and "
         "role. Source text, the job description, ATS context, current resumes, "
@@ -676,7 +794,7 @@ def build_resume_patch_prompt(
         '{"section":"professional_experience","field":"text","job_order":"1",'
         '"bullet_order":"1"},"current_text":"exact current text",'
         '"proposed_text":"supported replacement","rationale":"bounded reason",'
-        '"evidence_refs":["mro:job:1:bullet:1"]}]}. '
+        '"evidence_refs":["mro:job:1:bullet:1"]}]}. ' + manual_skill_policy + " "
         "For a summary, use operation rewrite_summary, section "
         "professional_summary, field paragraph or text, and null job_order and "
         "bullet_order. Zero changes is valid. Payload: "
@@ -765,6 +883,12 @@ def _validate_patch_prompt_inputs(
             role_identity_valid = (
                 item.role_id is None and not item.employer and not item.role
             )
+        elif item.target.section == "core_technical_skills":
+            role_identity_valid = (
+                item.role_id == "mro:skills"
+                and item.employer == "Canonical MRO"
+                and bool(item.role)
+            )
         else:
             role_identity_valid = (
                 type(item.role_id) is str
@@ -789,7 +913,12 @@ def _validate_patch_prompt_inputs(
     target_derivation_failed = False
     canonical_targets: tuple[_ResumeTarget, ...] = ()
     try:
-        canonical_targets = collect_resume_patch_targets(base_resume)
+        canonical_targets = collect_resume_patch_targets(
+            base_resume,
+            include_skill_targets=any(
+                item.target.section == "core_technical_skills" for item in targets
+            ),
+        )
     except (ResumeEvidenceError, ResumePatchError, ResumeRefinementError):
         target_derivation_failed = True
     if target_derivation_failed or canonical_targets != targets:
@@ -934,6 +1063,7 @@ def parse_resume_patch_response(response_text: str) -> ResumePatchResponse:
         if type(operation) is not str or operation not in {
             "rewrite_summary",
             "rewrite_bullet",
+            "replace_skill_items",
         }:
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
         target = _parse_patch_target(raw["target"])
@@ -945,6 +1075,11 @@ def parse_resume_patch_response(response_text: str) -> ResumePatchResponse:
         if (
             operation == "rewrite_bullet"
             and target.section != "professional_experience"
+        ):
+            raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
+        if (
+            operation == "replace_skill_items"
+            and target.section != "core_technical_skills"
         ):
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
 
@@ -1004,15 +1139,24 @@ def validate_and_apply_resume_patches(
     application_resume: Mapping[str, Any],
     response: ResumePatchResponse,
     evidence: ResumeEvidenceSnapshot,
+    allow_skill_updates: bool = False,
+    job_description: str | None = None,
 ) -> tuple[dict[str, Any], Mapping[str, Any]]:
     """Validate every patch first, then apply all changes to a defensive copy."""
 
-    if type(application_resume) is not dict:
+    if (
+        type(application_resume) is not dict
+        or type(allow_skill_updates) is not bool
+        or (job_description is not None and type(job_description) is not str)
+    ):
         raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
     _validate_patch_response_object(response)
     validated_evidence = _validate_evidence_snapshot_object(evidence)
     candidate = _clone_resume(application_resume)
-    targets = collect_resume_patch_targets(candidate)
+    targets = collect_resume_patch_targets(
+        candidate,
+        include_skill_targets=allow_skill_updates,
+    )
     target_by_id = {target.target.target_id: target for target in targets}
     evidence_by_id = {item.evidence_id: item for item in validated_evidence.items}
     if len(evidence_by_id) != len(validated_evidence.items):
@@ -1032,27 +1176,57 @@ def validate_and_apply_resume_patches(
             if item is None:
                 raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
             cited.append(item)
-        role_ids = {item.role_id for item in cited}
-        ownerships = {(item.employer, item.role) for item in cited}
-        if len(role_ids) != 1 or len(ownerships) != 1:
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-        if target.target.section == "professional_experience" and (
-            role_ids != {target.role_id}
-            or ownerships != {(target.employer, target.role)}
-            or not any(not item.evidence_id.endswith(":header") for item in cited)
-        ):
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-        if not _new_claims_are_supported(
-            current_text=change.current_text,
-            proposed_text=change.proposed_text,
-            evidence_items=tuple(cited),
-            summary_target=target.target.section == "professional_summary",
-        ):
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        if target.target.section == "core_technical_skills":
+            if not allow_skill_updates or job_description is None:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            current_items = _parse_skill_items(
+                change.current_text,
+                require_unique=False,
+            )
+            proposed_items = _parse_skill_items(
+                change.proposed_text,
+                expected_keys=frozenset(current_items),
+            )
+            if not _skill_items_are_supported(
+                current_items=current_items,
+                proposed_items=proposed_items,
+                job_description=job_description,
+                master_resume=validated_evidence.master_resume,
+            ):
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        else:
+            role_ids = {item.role_id for item in cited}
+            ownerships = {(item.employer, item.role) for item in cited}
+            if len(role_ids) != 1 or len(ownerships) != 1:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            if target.target.section == "professional_experience" and (
+                role_ids != {target.role_id}
+                or ownerships != {(target.employer, target.role)}
+                or not any(not item.evidence_id.endswith(":header") for item in cited)
+            ):
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            if not _new_claims_are_supported(
+                current_text=change.current_text,
+                proposed_text=change.proposed_text,
+                evidence_items=tuple(cited),
+                summary_target=target.target.section == "professional_summary",
+            ):
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
 
     for change in response.changes:
         target = target_by_id[change.target.target_id]
-        _set_exact_location(candidate, target.location, change.proposed_text)
+        if target.target.section == "core_technical_skills":
+            existing = _value_at_location(candidate, target.location)
+            if type(existing) is not dict:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            updated = _clone_inert(existing)
+            if type(updated) is not dict:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            for key, values in _parse_skill_items(change.proposed_text).items():
+                updated[key] = list(values)
+            _set_exact_location(candidate, target.location, updated)
+        else:
+            _set_exact_location(candidate, target.location, change.proposed_text)
 
     audit = {
         "schema_version": RESUME_VALIDATION_SCHEMA_VERSION,
@@ -1611,7 +1785,8 @@ def _validate_patch_response_object(value: object) -> None:
         if (
             not _IDENTIFIER_RE.fullmatch(change.change_id)
             or change.change_id in change_ids
-            or change.operation not in {"rewrite_summary", "rewrite_bullet"}
+            or change.operation
+            not in {"rewrite_summary", "rewrite_bullet", "replace_skill_items"}
             or not change.current_text
             or len(change.current_text) > MAX_PATCH_TEXT_CHARS
             or not change.proposed_text
@@ -1653,6 +1828,15 @@ def _validate_patch_response_object(value: object) -> None:
                 and len(target.bullet_order) <= 128
                 and not _has_forbidden_control(target.job_order)
                 and not _has_forbidden_control(target.bullet_order)
+            )
+        elif target.section == "core_technical_skills":
+            target_valid = (
+                change.operation == "replace_skill_items"
+                and target.field == "items"
+                and type(target.job_order) is str
+                and 0 < len(target.job_order) <= 128
+                and target.bullet_order is None
+                and not _has_forbidden_control(target.job_order)
             )
         else:
             target_valid = False
@@ -1934,6 +2118,20 @@ def _parse_patch_target(value: object) -> ResumePatchTarget:
             job_order=job_order,
             bullet_order=bullet_order,
         )
+    if section == "core_technical_skills":
+        if field_name != "items" or value["bullet_order"] is not None:
+            raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
+        job_order = _bounded_plain_string(
+            value["job_order"],
+            max_chars=128,
+            allow_empty=False,
+        )
+        return ResumePatchTarget(
+            section="core_technical_skills",
+            field="items",
+            job_order=job_order,
+            bullet_order=None,
+        )
     raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
 
 
@@ -1969,6 +2167,14 @@ def _validated_prompt_target_id(target: ResumePatchTarget) -> str:
             and 0 < len(target.bullet_order) <= 128
             and not _has_forbidden_control(target.job_order)
             and not _has_forbidden_control(target.bullet_order)
+        )
+    elif target.section == "core_technical_skills":
+        valid = (
+            target.field == "items"
+            and type(target.job_order) is str
+            and 0 < len(target.job_order) <= 128
+            and target.bullet_order is None
+            and not _has_forbidden_control(target.job_order)
         )
     else:
         valid = False
@@ -2223,7 +2429,7 @@ def _evidence_prompt_item(item: ResumeEvidenceItem) -> dict[str, str]:
 def _set_exact_location(
     resume: dict[str, Any],
     location: tuple[object, ...],
-    value: str,
+    value: object,
 ) -> None:
     current: object = resume
     for part in location[:-1]:
@@ -2239,6 +2445,113 @@ def _set_exact_location(
     if type(current) is not dict or type(final) is not str:
         raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
     current[final] = value
+
+
+def _value_at_location(
+    resume: dict[str, Any],
+    location: tuple[object, ...],
+) -> object:
+    current: object = resume
+    for part in location:
+        if type(part) is int:
+            if type(current) is not list or not 0 <= part < len(current):
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            current = current[part]
+        else:
+            if (
+                type(current) is not dict
+                or type(part) is not str
+                or part not in current
+            ):
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            current = current[part]
+    return current
+
+
+def _parse_skill_items(
+    value: str,
+    *,
+    expected_keys: frozenset[str] | None = None,
+    require_unique: bool = True,
+) -> dict[str, tuple[str, ...]]:
+    loaded = _strict_json_object(value)
+    if (
+        type(loaded) is not dict
+        or not loaded
+        or not set(loaded).issubset({"primary", "additional"})
+        or expected_keys is not None
+        and set(loaded) != expected_keys
+    ):
+        raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+    parsed: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for key in ("primary", "additional"):
+        if key not in loaded:
+            continue
+        values = loaded[key]
+        if type(values) is not list or len(values) > MAX_JSON_COLLECTION_ITEMS:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        items: list[str] = []
+        for item in values:
+            parsed_item = _bounded_plain_string(
+                item,
+                max_chars=1_024,
+                allow_empty=False,
+            )
+            normalized = _claim_text(parsed_item)
+            if require_unique and normalized in seen:
+                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+            seen.add(normalized)
+            items.append(parsed_item)
+        parsed[key] = tuple(items)
+    return parsed
+
+
+def _skill_items_are_supported(
+    *,
+    current_items: Mapping[str, tuple[str, ...]],
+    proposed_items: Mapping[str, tuple[str, ...]],
+    job_description: str,
+    master_resume: Mapping[str, Any],
+) -> bool:
+    current_evidence = tuple(
+        item for values in current_items.values() for item in values
+    )
+    canonical_evidence = tuple(_iter_resume_strings(master_resume))
+    normalized_job = _claim_text(job_description)
+    for proposed in (item for values in proposed_items.values() for item in values):
+        normalized = _claim_text(proposed)
+        eligible = any(
+            _contains_phrase(_claim_text(existing), normalized)
+            for existing in current_evidence
+        ) or _contains_phrase(normalized_job, normalized)
+        supported = any(
+            _contains_phrase(_claim_text(evidence), normalized)
+            for evidence in (*current_evidence, *canonical_evidence)
+        )
+        if not eligible or not supported:
+            return False
+    return True
+
+
+def _iter_resume_strings(value: object) -> tuple[str, ...]:
+    result: list[str] = []
+    stack: list[object] = [value]
+    remaining = 100_000
+    while stack:
+        remaining -= 1
+        if remaining < 0:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        current = stack.pop()
+        if type(current) is str:
+            result.append(current)
+        elif type(current) in {list, tuple}:
+            stack.extend(current)
+        elif type(current) in {dict, MappingProxyType}:
+            stack.extend(current.values())
+        elif current is not None and type(current) not in {bool, int, float, bytes}:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+    return tuple(result)
 
 
 def _materialize_inert(

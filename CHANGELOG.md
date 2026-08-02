@@ -20,6 +20,9 @@
   invariant comparison, and marker-protected disposable cleanup.
 - Fixed the JOD audit launcher to honor the state layer's exported result bound
   across direct CLI and Make execution.
+- Extended the existing manual patch workflow to prune rendered skills while
+  preserving evidence-backed DevOps, scalability, CI/CD, cloud, and GitHub
+  Actions terms without authorizing inflated surrounding claims.
 
 ### Safety and governance
 

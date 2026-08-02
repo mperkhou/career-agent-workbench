@@ -85,6 +85,7 @@ include = [
   "/src/career_agent_workbench/api_client.py",
   "/src/career_agent_workbench/application_resume.py",
   "/src/career_agent_workbench/application_state.py",
+  "/src/career_agent_workbench/artifact_exports.py",
   "/src/career_agent_workbench/ats.py",
   "/src/career_agent_workbench/codex_cli.py",
   "/src/career_agent_workbench/cli_paths.py",

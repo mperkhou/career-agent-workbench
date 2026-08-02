@@ -366,6 +366,7 @@ def refine_resume_for_job(
     runner: ModelRunner,
     model_config: CodexModelConfig,
     external_critique: str | None = None,
+    template_path: Path | None = None,
     dry_run: bool = False,
 ) -> ResumeRefinementResult:
     """Derive an evidence-grounded v2 candidate from the exact stored v1."""
@@ -410,7 +411,11 @@ def refine_resume_for_job(
         response=parsed,
         evidence=evidence,
     )
-    html, pdf, diagnostics = _render_and_score(candidate, job_description)
+    html, pdf, diagnostics = _render_and_score(
+        candidate,
+        job_description,
+        template_path=template_path,
+    )
 
     result = ResumeRefinementResult(
         changed_count=len(parsed.changes),
@@ -1130,9 +1135,14 @@ def _run_patch_model(
 def _render_and_score(
     candidate: Mapping[str, Any],
     job_description: str,
+    *,
+    template_path: Path | None = None,
 ) -> tuple[str, bytes, AtsDiagnostics]:
     try:
-        html = render_resume_html_from_mapping(resume=candidate)
+        render_options = (
+            {} if template_path is None else {"template_path": template_path}
+        )
+        html = render_resume_html_from_mapping(resume=candidate, **render_options)
         pdf = render_resume_pdf_from_html(html)
         diagnostics = calculate_ats_diagnostics(
             resume_pdf=pdf,

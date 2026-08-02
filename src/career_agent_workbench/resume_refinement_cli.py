@@ -9,12 +9,13 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from career_agent_workbench.artifact_exports import export_rendered_resume
 from career_agent_workbench.application_state import ApplicationStateStore
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
     load_command_config,
-    reject_compatibility_path,
+    resolve_private_workspace_path,
 )
 from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest, ModelResult
 from career_agent_workbench.config import Settings, WorkspaceMember
@@ -77,7 +78,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template", type=Path, default=None)
     parser.add_argument("--job-id", action="append")
     parser.add_argument("--all-active", action="store_true")
-    parser.add_argument("--artifact-dir", type=Path, default=None)
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Write rendered YAML/HTML/PDF only beneath the private workspace.",
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -112,11 +118,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     try:
-        reject_compatibility_path(args.artifact_dir)
         if not 0 <= args.api_retries <= 3:
             raise CliConfigurationError("Model execution configuration is invalid.")
-        if args.template is not None:
-            raise CliConfigurationError("Custom workflow templates are unsupported.")
         config = load_command_config(
             args,
             required=(
@@ -129,6 +132,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "second_pass_model": args.api_model,
                 "llm_api_timeout_seconds": args.api_timeout_seconds,
             },
+        )
+        template = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.template,
+                must_exist=True,
+            )
+            if args.template is not None
+            else None
+        )
+        artifact_dir = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.artifact_dir,
+                directory=True,
+            )
+            if args.artifact_dir is not None
+            else None
         )
         store = ApplicationStateStore(config.paths)
         selected = [item.strip() for item in args.job_id or [] if item.strip()]
@@ -157,10 +178,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     workflow="refinement",
                 ),
                 external_critique=_external_critique(args),
+                template_path=template,
                 dry_run=args.dry_run,
             )
             for job_id in job_ids
         ]
+        if artifact_dir is not None:
+            for result in results:
+                export_rendered_resume(
+                    paths=config.paths,
+                    output_dir=artifact_dir,
+                    job_id=result.job_id,
+                    resume=result.candidate,
+                    template_path=template,
+                )
     except CliConfigurationError as exc:
         parser.error(str(exc))
     except Exception:

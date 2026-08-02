@@ -28,6 +28,7 @@ STATE_FLAGS = (
     "--master-resume-text",
     "--blacklist-path",
     "--tmp-dir",
+    "--template",
 )
 PRIVATE_LITERALS = ("profile/", "output/", ".blacklist", "tmp/")
 BATCH_TARGETS = (
@@ -143,6 +144,47 @@ def test_model_and_remaining_path_overrides_are_presence_aware() -> None:
         assert tokens.count(flag) == 1
     assert "workflow-model" in output and "shared-model" not in output
     assert "workflow-effort" in output and "shared-effort" not in output
+
+
+def test_resume_template_and_highlight_selectors_propagate_once() -> None:
+    tokens = shlex.split(
+        _dry_run(
+            "highlight-draft-resumes",
+            "RESUME_TEMPLATE=private-template.html",
+            "HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET=2",
+            "HIGHLIGHT_EXPERIENCE_COMPANY=Example Cooperative",
+            "HIGHLIGHT_EXPERIENCE_JOB_ORDER=3",
+        )
+    )
+    expected = {
+        "--template": "private-template.html",
+        "--max-strong-spans-per-bullet": "2",
+        "--experience-company": "Example Cooperative",
+        "--experience-job-order": "3",
+    }
+    for flag, value in expected.items():
+        assert tokens.count(flag) == 1
+        assert value in tokens
+
+
+@pytest.mark.parametrize("value", ["1", "true"])
+def test_regeneration_force_is_explicit_and_conditional(value: str) -> None:
+    assert (
+        shlex.split(
+            _dry_run("regenerate-draft-resumes", f"FIRST_DRAFT_FORCE={value}")
+        ).count("--force")
+        == 1
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "false", "unexpected"])
+def test_regeneration_without_enabled_force_preserves_existing_drafts(
+    value: str | None,
+) -> None:
+    variables = () if value is None else (f"FIRST_DRAFT_FORCE={value}",)
+    assert "--force" not in shlex.split(
+        _dry_run("regenerate-draft-resumes", *variables)
+    )
 
 
 @pytest.mark.parametrize("target", BATCH_TARGETS)

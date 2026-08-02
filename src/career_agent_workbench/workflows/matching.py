@@ -23,6 +23,7 @@ from career_agent_workbench.application_state import (
     ApplicationSeedOutcome,
     ApplicationStateStore,
     MAX_QUERY_RESULTS,
+    QueryOutcomeWrite,
 )
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
@@ -258,16 +259,15 @@ class MatchingWorkflow:
         self,
         *,
         bounds: MatchingBounds,
-        history: tuple[StoredQueryOutcome, ...] = (),
+        history: tuple[StoredQueryOutcome, ...] | None = None,
         supplemental_queries: tuple[JobSearchQuery, ...] = (),
         existing_job_ids: tuple[str, ...] = (),
         progress_callback: Callable[[MatchingProgress], None] | None = None,
     ) -> MatchingWorkflowResult:
-        """Run with no provider, model, history, or output construction."""
+        """Run without model calls or generated-artifact construction."""
 
         if type(bounds) is not MatchingBounds:
             raise MatchingConfigurationError(_CONFIGURATION_ERROR)
-        _validate_history(history)
         _validate_queries(supplemental_queries, limit=_MAX_QUERY_INPUTS)
         existing = _validate_job_ids(existing_job_ids)
         if progress_callback is not None and not callable(progress_callback):
@@ -278,6 +278,13 @@ class MatchingWorkflow:
             self._store.assert_workspace_binding(self._paths)
         except Exception:  # noqa: BLE001 - sanitize an injected state boundary
             raise MatchingConfigurationError(_CONFIGURATION_ERROR) from None
+
+        if history is None:
+            try:
+                history = self._store.load_query_outcomes()
+            except Exception:  # noqa: BLE001 - sanitize an injected state boundary
+                raise MatchingStateError(_STATE_ERROR) from None
+        _validate_history(history)
 
         master_resume = _required_exact_path(
             self._paths,
@@ -316,6 +323,7 @@ class MatchingWorkflow:
         seen_job_ids = set(existing)
         jobs_seen = 0
         outcomes: list[MatchingQueryOutcome] = []
+        persisted_outcomes: list[QueryOutcomeWrite] = []
         for ordinal, scored in enumerate(ranked, start=1):
             if len(seeded_ids) >= bounds.max_jobs:
                 break
@@ -336,6 +344,7 @@ class MatchingWorkflow:
             except Exception:  # noqa: BLE001 - a provider is an injected boundary
                 counters.provider_missed = True
                 outcomes.append(counters.freeze())
+                persisted_outcomes.append(_persisted_outcome(scored, counters))
                 _progress(progress_callback, "searched", len(outcomes), len(ranked))
                 continue
             counters.results_returned = min(result.count, _MAX_RESULT_JOBS)
@@ -429,6 +438,13 @@ class MatchingWorkflow:
                 counters.results_returned,
             )
             outcomes.append(counters.freeze())
+            persisted_outcomes.append(_persisted_outcome(scored, counters))
+
+        if persisted_outcomes:
+            try:
+                self._store.record_query_outcomes(persisted_outcomes)
+            except Exception:  # noqa: BLE001 - sanitize an injected state boundary
+                raise MatchingStateError(_STATE_ERROR) from None
 
         return MatchingWorkflowResult(
             query_outcomes=tuple(outcomes),
@@ -510,6 +526,32 @@ class _MutableOutcome:
             seeded=self.seeded,
             provider_missed=self.provider_missed,
         )
+
+
+def _persisted_outcome(
+    scored: ScoredQuery,
+    counters: _MutableOutcome,
+) -> QueryOutcomeWrite:
+    query = scored.query
+    return QueryOutcomeWrite(
+        keywords=query.keywords,
+        location=query.location,
+        date_posted=query.date_posted,
+        workplace_type=query.workplace_type,
+        experience_level=query.experience_level,
+        job_type=query.job_type,
+        sort_by=query.sort_by,
+        limit=query.limit,
+        page=1,
+        profile_match=scored.profile_match,
+        query_score=scored.score,
+        results_returned=counters.results_returned,
+        fresh_jobs_accepted=counters.seeded,
+        skipped_existing=counters.skipped_existing,
+        skipped_blacklisted=counters.skipped_blacklisted,
+        skipped_workplace_type=counters.skipped_workplace_type,
+        skipped_experience_level=counters.skipped_experience_level,
+    )
 
 
 class _CompanyBlacklist:

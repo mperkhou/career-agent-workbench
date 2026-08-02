@@ -8,13 +8,14 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from career_agent_workbench.artifact_exports import export_rendered_resume
 from career_agent_workbench.application_state import ApplicationStateStore
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
     build_codex_runner,
     load_command_config,
-    reject_compatibility_path,
+    resolve_private_workspace_path,
     with_model_request_policy,
 )
 from career_agent_workbench.config import WorkspaceMember
@@ -41,7 +42,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--template", type=Path, default=None)
     parser.add_argument("--job-id", action="append", dest="job_ids", required=True)
-    parser.add_argument("--artifact-dir", type=Path, default=None)
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Write rendered YAML/HTML/PDF only beneath the private workspace.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--codex-command", default="codex")
@@ -61,9 +67,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     try:
-        reject_compatibility_path(args.artifact_dir)
-        if args.template is not None:
-            raise CliConfigurationError("Custom workflow templates are unsupported.")
         config = load_command_config(
             args,
             required=(
@@ -78,6 +81,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "manual_pass_codex_model": args.codex_model,
                 "manual_pass_codex_reasoning_effort": (args.codex_reasoning_effort),
             },
+        )
+        template = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.template,
+                must_exist=True,
+            )
+            if args.template is not None
+            else None
+        )
+        artifact_dir = (
+            resolve_private_workspace_path(
+                config.paths,
+                args.artifact_dir,
+                directory=True,
+            )
+            if args.artifact_dir is not None
+            else None
         )
         store = ApplicationStateStore(config.paths)
         runner = with_model_request_policy(
@@ -103,14 +124,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         failures = 0
         for job_id in job_ids:
             try:
-                run_manual_resume_pass(
+                result = run_manual_resume_pass(
                     store=store,
                     paths=config.paths,
                     job_id=job_id,
                     runner=runner,
                     model_config=model,
+                    template_path=template,
                     dry_run=args.dry_run,
                 )
+                if artifact_dir is not None:
+                    export_rendered_resume(
+                        paths=config.paths,
+                        output_dir=artifact_dir,
+                        job_id=job_id,
+                        resume=result.candidate,
+                        template_path=template,
+                    )
                 processed += 1
             except Exception:
                 failures += 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -74,14 +75,21 @@ def test_console_metadata_exits_before_runtime_loading(
 
 def test_dotenv_workspace_and_explicit_member_precedence(tmp_path: Path) -> None:
     workspace = tmp_path / "fictional-workspace"
+    workspace.mkdir()
     process_database = tmp_path / "process.sqlite3"
     explicit_database = tmp_path / "explicit.sqlite3"
-    env_file = tmp_path / "runtime.env"
+    env_file = tmp_path / "bootstrap.env"
+    private_env_file = workspace / ".env"
     env_file.write_text(
         "CAREER_AGENT_WORKBENCH_WORKSPACE=fictional-workspace\n"
+        "CAREER_AGENT_WORKBENCH_PRIVATE_ENV_FILE=fictional-workspace/.env\n",
+        encoding="utf-8",
+    )
+    private_env_file.write_text(
         "CAREER_AGENT_WORKBENCH_DATABASE=dotenv.sqlite3\n",
         encoding="utf-8",
     )
+    os.chmod(private_env_file, 0o600)
     environment = {
         "CAREER_AGENT_WORKBENCH_ENV_FILE": str(env_file),
         "CAREER_AGENT_WORKBENCH_DATABASE": str(process_database),
@@ -318,8 +326,91 @@ def test_jod_audit_console_composes_resolved_store_without_database(
     )
     assert jod_cleaner_audit.main([]) == 0
     assert captured["paths"] is paths
-    assert captured["kwargs"] == {"apply": False, "sample_limit": 10}
+    assert captured["kwargs"] == {
+        "apply": False,
+        "sample_limit": 10,
+        "refresh_ats": True,
+        "backup": None,
+    }
     assert "changed_rows" in capsys.readouterr().out
+
+
+def test_jod_audit_apply_refreshes_ats_after_one_default_backup(monkeypatch) -> None:
+    stored: list[dict[str, object]] = []
+    backups = 0
+    record = SimpleNamespace(
+        job_id="synthetic-job",
+        job_title="Reliability Engineer",
+        company="Example Cooperative",
+        job_url="https://jobs.example.com/synthetic-job",
+        source="example_public",
+        job_description="Responsibilities: build reliable Python systems.",
+        prompt_job_description="stale",
+        resume_pdf=b"synthetic-pdf",
+        selected_variant=None,
+    )
+
+    class FakeStore:
+        def list_applications(self, scope, *, limit):
+            assert scope == "all" and limit == 10_000
+            return (record,)
+
+        def store_jod(self, job_id, **kwargs):
+            stored.append({"job_id": job_id, **kwargs})
+
+    score = SimpleNamespace(
+        overall_score=81,
+        parsing_score=82,
+        keyword_match_score=83,
+        semantic_match_score=84,
+        formatting_risk="low",
+        missing_high_value_terms=("bounded",),
+    )
+    diagnostics = SimpleNamespace(score=score)
+    monkeypatch.setattr(
+        jod_cleaner_audit,
+        "calculate_ats_diagnostics",
+        lambda **_kwargs: diagnostics,
+    )
+    monkeypatch.setattr(
+        jod_cleaner_audit,
+        "asdict",
+        lambda _value: {"synthetic": True},
+    )
+
+    def backup() -> None:
+        nonlocal backups
+        backups += 1
+
+    result = jod_cleaner_audit.audit_tracker_state(
+        FakeStore(),
+        apply=True,
+        sample_limit=10,
+        backup=backup,
+    )
+
+    assert backups == 1
+    assert result["backup_created"] is True
+    assert result["ats_fields_changed"] == 1
+    assert len(stored) == 1
+    assert stored[0]["ats"].score == 81
+
+
+def test_jod_sqlite_backup_is_read_only_and_user_only(tmp_path: Path) -> None:
+    database = tmp_path / "synthetic.sqlite3"
+    import sqlite3
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE synthetic (value INTEGER NOT NULL)")
+        connection.execute("INSERT INTO synthetic VALUES (1)")
+    before = database.read_bytes()
+
+    jod_cleaner_audit._backup_sqlite_database(database)
+
+    backups = tuple(tmp_path.glob("synthetic.sqlite3.backup-*"))
+    assert len(backups) == 1
+    assert database.read_bytes() == before
+    assert backups[0].stat().st_mode & 0o777 == 0o600
 
 
 def test_refinement_console_composes_resolved_runner_and_workflow(

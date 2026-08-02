@@ -49,6 +49,7 @@ from career_agent_workbench.application_state import (
     ApplicationWorkflowSnapshot,
     ArtifactKind,
     AtsFields,
+    QueryOutcomeWrite,
     ResumeVariantWrite,
     artifact_filename,
 )
@@ -771,13 +772,22 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
                 "PRAGMA index_list(application_resume_variants)"
             )
         }
+        query_indexes = {
+            row["name"]
+            for row in connection.execute("PRAGMA index_list(search_query_outcomes)")
+        }
         foreign_keys = connection.execute(
             "PRAGMA foreign_key_list(application_resume_variants)"
         ).fetchall()
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
 
     assert version == 1
-    assert tables == {"applications", "application_resume_variants"}
+    assert tables == {
+        "applications",
+        "application_resume_variants",
+        "search_query_outcomes",
+        "sqlite_sequence",
+    }
     assert application_indexes == {
         "applications_archive_order",
         "applications_unique_job_id",
@@ -788,6 +798,7 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
         "application_resume_variants_identity",
         "sqlite_autoindex_application_resume_variants_1",
     }
+    assert query_indexes == {"search_query_outcomes_keywords_idx"}
     assert len(foreign_keys) == 1
     foreign_key = foreign_keys[0]
     assert foreign_key["table"] == "applications"
@@ -795,6 +806,39 @@ def test_fresh_initialization_is_idempotent_with_exact_schema(tmp_path: Path) ->
     assert foreign_key["to"] == "job_id"
     assert foreign_key["on_delete"] == "CASCADE"
     assert not database.with_name(f"{database.name}-journal").exists()
+
+
+def test_query_outcomes_round_trip_bounded_noncontent_history(tmp_path: Path) -> None:
+    store, _database = _store(tmp_path)
+    store.initialize()
+    outcome = QueryOutcomeWrite(
+        keywords="Synthetic Reliability",
+        location="Example Region",
+        date_posted="past_week",
+        workplace_type="remote",
+        experience_level="mid_senior",
+        job_type="full_time",
+        sort_by="recent",
+        limit=10,
+        page=1,
+        profile_match=0.75,
+        query_score=0.8,
+        results_returned=4,
+        fresh_jobs_accepted=2,
+        skipped_existing=1,
+    )
+
+    assert store.record_query_outcomes((outcome,)) == 1
+    history = store.load_query_outcomes()
+
+    assert len(history) == 1
+    assert history[0].keywords == "Synthetic Reliability"
+    assert history[0].fresh_jobs_accepted == 2
+    assert "Synthetic Reliability" not in repr(outcome)
+
+    for _ in range(3):
+        assert store.record_query_outcomes((outcome,) * 200) == 200
+    assert len(store.load_query_outcomes()) == 500
 
 
 def test_minimal_legacy_migration_preserves_bytes_and_is_repeatable(
@@ -1279,6 +1323,40 @@ def test_jod_aro_clo_application_artifacts_and_ats_round_trip(
         ats.updated_at,
     )
     assert result.ats.diagnostics["checks"] == (True, False)
+
+
+def test_jod_refresh_updates_ats_on_selected_variant_atomically(tmp_path: Path) -> None:
+    store, database = _initialize_with_application(tmp_path)
+    store.upsert_resume_variant(JOB_ONE, _variant("v1"))
+    store.select_resume_variant(JOB_ONE, "v1")
+    refreshed = AtsFields(
+        score=91,
+        parsing_score=92,
+        keyword_score=90,
+        semantic_score=89,
+        formatting_risk="low",
+        missing_terms="synthetic-term",
+        diagnostics={"refreshed": True},
+        updated_at="2035-02-03T04:05:07+00:00",
+    )
+
+    projected = store.store_jod(
+        JOB_ONE,
+        source_text="Updated synthetic source.",
+        prompt_text="Updated synthetic prompt.",
+        ats=refreshed,
+    )
+
+    assert projected.selected_variant is not None
+    assert projected.selected_variant.ats.score == 91
+    assert projected.ats.score == 91
+    assert store.get_resume_variant(JOB_ONE, "v1").ats.score == 91
+    with sqlite3.connect(database) as connection:
+        application_score = connection.execute(
+            "SELECT ats_score FROM applications WHERE job_id = ?",
+            (JOB_ONE,),
+        ).fetchone()[0]
+    assert application_score == 91
 
 
 def test_metadata_refresh_preserves_dedicated_state(tmp_path: Path) -> None:

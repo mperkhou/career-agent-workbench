@@ -989,6 +989,47 @@ def test_collect_highlight_bullets_rejects_missing_duplicate_identities() -> Non
         collect_highlight_bullets(duplicate)
 
 
+def test_highlight_company_job_order_and_span_bounds_are_exact() -> None:
+    resume = _resume(V1_BULLET)
+    second = copy.deepcopy(resume["professional_experience"]["jobs"][0])
+    second["order"] = "2"
+    second["line_1"]["company_name_text"] = "Fictional Harbor Group"
+    second["bullet_points"][0]["order"] = "1"
+    second["bullet_points"][0]["text"] = "Maintained synthetic harbor systems."
+    resume["professional_experience"]["jobs"].append(second)
+
+    selected = collect_highlight_bullets(
+        resume,
+        experience_company="harbor",
+        experience_job_order="2",
+    )
+    assert tuple(item.target_id for item in selected) == ("experience:2:bullet:1",)
+
+    highlighted = (
+        "Maintained <strong>synthetic</strong> <strong>harbor</strong> systems."
+    )
+    response = json.dumps(
+        {
+            "schema_version": HIGHLIGHT_RESPONSE_SCHEMA_VERSION,
+            "updates": [
+                {
+                    "target_id": "experience:2:bullet:1",
+                    "current_text": "Maintained synthetic harbor systems.",
+                    "highlighted_text": highlighted,
+                }
+            ],
+        }
+    )
+    with pytest.raises(ResumeHighlightError):
+        apply_highlight_response(
+            resume,
+            response,
+            max_strong_spans_per_bullet=1,
+            experience_company="harbor",
+            experience_job_order="2",
+        )
+
+
 def test_manual_profiles_and_presence_aware_overrides_are_exact() -> None:
     assert {
         key.value: (value.model, value.reasoning_effort)

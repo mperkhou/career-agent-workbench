@@ -10,6 +10,11 @@
 - Restored workflow-specific model routing for JOD, core-skill, second-pass,
   manual-pass, and highlighting commands while preserving the general provider
   default and exact compatibility-variable precedence.
+- Restored conditional first-draft replacement, backup-first JOD cleanup with
+  optional ATS refresh, persisted bounded query outcomes, scoped highlighting,
+  private templates, and explicit rendered YAML/HTML/PDF exports.
+- Added prompt-only pass-one output without raw model-response persistence and
+  retained the current CLI, Make, state, selection, lineage, and CAS boundaries.
 
 ### Safety and governance
 

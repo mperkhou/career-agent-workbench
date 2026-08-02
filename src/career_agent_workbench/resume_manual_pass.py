@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from career_agent_workbench.application_state import ApplicationStateStore
@@ -73,6 +74,7 @@ def run_manual_resume_pass(
     job_id: str,
     runner: ModelRunner,
     model_config: CodexModelConfig,
+    template_path: Path | None = None,
     dry_run: bool = False,
 ) -> ManualPassResult:
     """Derive one patch-validated manual candidate from exact stored v2."""
@@ -118,7 +120,11 @@ def run_manual_resume_pass(
         response=parsed,
         evidence=evidence,
     )
-    html, pdf, diagnostics = _render_and_score(candidate, job_description)
+    html, pdf, diagnostics = _render_and_score(
+        candidate,
+        job_description,
+        template_path=template_path,
+    )
     result = ManualPassResult(
         changed_count=len(parsed.changes),
         ats_score=diagnostics.score.overall_score,

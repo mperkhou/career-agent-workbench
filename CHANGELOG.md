@@ -15,12 +15,17 @@
   private templates, and explicit rendered YAML/HTML/PDF exports.
 - Added prompt-only pass-one output without raw model-response persistence and
   retained the current CLI, Make, state, selection, lineage, and CAS boundaries.
+- Added guarded, explicit-path ops workspace materialization, no-follow member
+  copying, online SQLite backup, disposable-only initialization, sanitized
+  invariant comparison, and marker-protected disposable cleanup.
 
 ### Safety and governance
 
 - Keeps the public bootstrap dotenv limited to non-secret workspace discovery;
   private runtime values are loaded only from a user-only file outside the
   public repository.
+- Keeps ops migration results limited to counts and booleans while rejecting
+  public-repository destinations, path escapes, symlinks, and existing roots.
 
 ## [1.0.0] - 2026-08-01
 

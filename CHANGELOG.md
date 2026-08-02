@@ -6,6 +6,8 @@
 
 - Initialized the digest-bound operational-parity workflow for the nine
   approved v1.2.0 capability gaps; implementation remains separately gated.
+- Added bounded legacy/public Chromium comparisons and read-only gate evidence
+  routes for each approved parity slice.
 
 ## [1.1.0] - 2026-08-02
 

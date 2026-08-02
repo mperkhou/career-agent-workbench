@@ -29,6 +29,9 @@
 - Aligned migration artifact evidence with canonical resume variants,
   no-variant application fallbacks, backups, and cover letters so derived
   application projections may be safely resynchronized from unchanged state.
+- Restored the local tracker view and lifecycle controls, bounded Add/Seed and
+  public URL ingestion, sequential allowlisted resume actions with app-scoped
+  progress, and explicit selected-resume ATS recalculation.
 
 ### Safety and governance
 

@@ -5,12 +5,9 @@ from __future__ import annotations
 import argparse
 import subprocess
 import threading
-import uuid
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
-from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request
 
@@ -20,7 +17,20 @@ from career_agent_workbench.cli_paths import (
     add_runtime_path_arguments,
     load_command_config,
 )
-from career_agent_workbench.config import RuntimeConfig, WorkspaceMember, WorkspacePaths
+from career_agent_workbench.config import RuntimeConfig, WorkspaceMember
+from career_agent_workbench.webapp_actions import (
+    ACTION_OPTIONS,
+    ATS_ACTION,
+    ActionRegistry,
+    CommandExecutor,
+    CommandStage,
+    action_snapshots,
+    build_action_stages,
+    build_seed_argv,
+    create_action,
+    run_ats_action,
+    run_command_action,
+)
 from career_agent_workbench.webapp_ingestion import (
     GenericHtmlFetcher,
     LinkedInDetailsFetcher,
@@ -41,48 +51,7 @@ from career_agent_workbench.webapp_tracker import (
     tracker_counts,
 )
 
-
-CommandExecutor = Callable[[Sequence[str]], int]
-
-ACTION_TARGETS = {
-    "regenerate-draft-resumes": "Regenerate draft resumes",
-    "regenerate-resumes": "Regenerate and refine resumes",
-    "refine-draft-resumes": "Refine draft resumes",
-    "regenerate-aro-objects": "Regenerate application resume objects",
-    "sync-draft-to-aro": "Sync drafts to application resume objects",
-    "highlight-draft-resumes": "Highlight draft resumes",
-    "manual-pass-resumes": "Run manual resume pass",
-}
-_PATH_ASSIGNMENTS = (
-    ("root", "WORKSPACE"),
-    ("database", "DATABASE"),
-    ("output_dir", "OUTPUT_DIR"),
-    ("profile_dir", "PROFILE_DIR"),
-    ("master_resume", "MASTER_RESUME"),
-    ("master_resume_text", "MASTER_RESUME_TEXT"),
-    ("blacklist", "BLACKLIST"),
-    ("tmp_dir", "TMP_DIR"),
-)
-_MAX_ACTIONS = 32
 _EXTENSION_KEY = "career_agent_workbench"
-
-
-@dataclass(slots=True)
-class _ActionRecord:
-    action_id: str
-    target_label: str
-    status: str
-    queued_at: str
-    started_at: str | None = None
-    finished_at: str | None = None
-    return_code: int | None = None
-    message: str = "Action queued."
-
-
-@dataclass(slots=True)
-class _ActionRegistry:
-    actions: dict[str, _ActionRecord] = field(default_factory=dict)
-    lock: Any = field(default_factory=threading.Lock)
 
 
 def _port(value: str) -> int:
@@ -141,127 +110,6 @@ def _bound_project_root(project_root: Path | None) -> Path | None:
     except (OSError, RuntimeError):
         return None
     return resolved
-
-
-def _timestamp() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def _action_snapshots(registry: _ActionRegistry) -> list[dict[str, object]]:
-    with registry.lock:
-        records = tuple(reversed(tuple(registry.actions.values())))
-        return [
-            {
-                "id": record.action_id,
-                "target": record.target_label,
-                "status": record.status,
-                "queued_at": record.queued_at,
-                "started_at": record.started_at,
-                "finished_at": record.finished_at,
-                "return_code": record.return_code,
-                "message": record.message,
-            }
-            for record in records
-        ]
-
-
-def _create_action(
-    registry: _ActionRegistry,
-    *,
-    target: str | None = None,
-    label: str | None = None,
-) -> _ActionRecord:
-    if (target is None) == (label is None):
-        raise ValueError("Action label is invalid.")
-    record = _ActionRecord(
-        action_id=uuid.uuid4().hex,
-        target_label=ACTION_TARGETS[target] if target is not None else str(label),
-        status="queued",
-        queued_at=_timestamp(),
-    )
-    with registry.lock:
-        registry.actions[record.action_id] = record
-        while len(registry.actions) > _MAX_ACTIONS:
-            registry.actions.pop(next(iter(registry.actions)))
-    return record
-
-
-def _run_action(
-    registry: _ActionRegistry,
-    action_id: str,
-    executor: CommandExecutor,
-    argv: tuple[str, ...],
-) -> None:
-    with registry.lock:
-        record = registry.actions[action_id]
-        record.status = "running"
-        record.started_at = _timestamp()
-        record.message = "Action running."
-    try:
-        return_code = executor(argv)
-        if type(return_code) is not int:
-            return_code = 1
-    except Exception:  # noqa: BLE001 - background failures stay content-free.
-        return_code = 1
-    with registry.lock:
-        record = registry.actions[action_id]
-        record.return_code = return_code
-        record.finished_at = _timestamp()
-        if return_code == 0:
-            record.status = "completed"
-            record.message = "Action completed."
-        else:
-            record.status = "failed"
-            record.message = "Action failed."
-
-
-def _make_argv(
-    *,
-    project_root: Path,
-    target: str,
-    job_ids: tuple[str, ...],
-    paths: WorkspacePaths,
-) -> tuple[str, ...]:
-    argv = [
-        "make",
-        "-C",
-        str(project_root),
-        target,
-        f"JOB_IDS={' '.join(job_ids)}",
-    ]
-    for member, assignment in _PATH_ASSIGNMENTS:
-        value = getattr(paths, member)
-        if value is not None:
-            argv.append(f"{assignment}={value}")
-    return tuple(argv)
-
-
-def _seed_argv(
-    *,
-    project_root: Path,
-    location: str,
-    date_posted: str,
-    limit_per_query: int,
-    max_queries: int,
-    max_jobs: int,
-    paths: WorkspacePaths,
-) -> tuple[str, ...]:
-    argv = [
-        "make",
-        "-C",
-        str(project_root),
-        "seed-jobs",
-        f"LOCATION={location}",
-        f"DATE_POSTED={date_posted}",
-        f"LIMIT_PER_QUERY={limit_per_query}",
-        f"MAX_QUERIES={max_queries}",
-        f"MAX_JOBS={max_jobs}",
-    ]
-    for member, assignment in _PATH_ASSIGNMENTS:
-        value = getattr(paths, member)
-        if value is not None:
-            argv.append(f"{assignment}={value}")
-    return tuple(argv)
 
 
 def _selected_job_ids(values: Sequence[str]) -> tuple[str, ...] | None:
@@ -351,7 +199,7 @@ def create_app(
         "store": store,
         "executor": command_executor or _default_command_executor,
         "project_root": _bound_project_root(project_root),
-        "actions": _ActionRegistry(),
+        "actions": ActionRegistry(),
     }
     app.extensions[_EXTENSION_KEY] = extension
     linkedin_fetcher = linkedin_details_fetcher or (
@@ -386,8 +234,11 @@ def create_app(
             tracker_statuses=TRACKER_STATUSES,
             tracker_sorts=TRACKER_SORTS,
             tracker_directions=TRACKER_DIRECTIONS,
-            targets=ACTION_TARGETS,
-            actions=_action_snapshots(extension["actions"]),
+            targets={
+                **ACTION_OPTIONS,
+                ATS_ACTION: "Recalculate selected ATS",
+            },
+            actions=action_snapshots(extension["actions"]),
         )
 
     @app.post("/applications/<job_id>")
@@ -451,7 +302,7 @@ def create_app(
     @app.post("/applications/add/seed")
     def seed_applications():
         try:
-            _tracker_view(form=True)
+            view = _tracker_view(form=True)
             location, date_posted, limit_per_query, max_queries, max_jobs = (
                 _seed_request()
             )
@@ -460,7 +311,7 @@ def create_app(
                 return jsonify(
                     message="Seed action is unavailable.", status="rejected"
                 ), 503
-            argv = _seed_argv(
+            argv = build_seed_argv(
                 project_root=bound_root,
                 location=location,
                 date_posted=date_posted,
@@ -470,16 +321,29 @@ def create_app(
                 paths=paths,
             )
             registry = extension["actions"]
-            action = _create_action(registry, label="Seed and match jobs")
+            action = create_action(
+                registry,
+                label="Seed and match jobs",
+                total_stages=1,
+            )
             thread = threading.Thread(
-                target=_run_action,
-                args=(registry, action.action_id, extension["executor"], argv),
+                target=run_command_action,
+                args=(
+                    registry,
+                    action.action_id,
+                    extension["executor"],
+                    (CommandStage(label="Seed and match jobs", argv=argv),),
+                ),
                 daemon=True,
             )
             thread.start()
         except Exception:  # noqa: BLE001 - request failures stay content-free.
             return jsonify(message="Seed request is invalid.", status="rejected"), 400
-        return jsonify(action_id=action.action_id, status="accepted"), 202
+        return jsonify(
+            action_id=action.action_id,
+            refresh_url=view.index_url,
+            status="accepted",
+        ), 202
 
     def _ingestion_response(*, linkedin: bool):
         try:
@@ -527,9 +391,18 @@ def create_app(
 
     @app.post("/actions/run")
     def run_action():
+        try:
+            view = _tracker_view(form=True)
+        except TrackerViewError:
+            return jsonify(message="Action request is invalid.", status="rejected"), 400
         target = request.form.get("target", "")
         job_ids = _selected_job_ids(request.form.getlist("job_id"))
-        if target not in ACTION_TARGETS or job_ids is None:
+        highlight_value = request.form.get("highlight")
+        if (
+            target not in {*ACTION_OPTIONS, ATS_ACTION}
+            or highlight_value not in {None, "1"}
+            or job_ids is None
+        ):
             return jsonify(message="Action request is invalid.", status="rejected"), 400
         try:
             records = store.fetch_job_records(job_ids)
@@ -537,29 +410,64 @@ def create_app(
             return jsonify(message="Action request is invalid.", status="rejected"), 400
         if tuple(record.job_id for record in records) != job_ids:
             return jsonify(message="Action request is invalid.", status="rejected"), 400
-        bound_root = extension["project_root"]
-        if bound_root is None or not (bound_root / "Makefile").is_file():
-            return jsonify(message="Action is unavailable.", status="rejected"), 503
-
-        argv = _make_argv(
-            project_root=bound_root,
-            target=target,
-            job_ids=job_ids,
-            paths=paths,
-        )
         registry = extension["actions"]
-        action = _create_action(registry, target=target)
-        thread = threading.Thread(
-            target=_run_action,
-            args=(registry, action.action_id, extension["executor"], argv),
-            daemon=True,
-        )
+        if target == ATS_ACTION:
+            if highlight_value is not None:
+                return jsonify(
+                    message="Action request is invalid.", status="rejected"
+                ), 400
+            action = create_action(
+                registry,
+                label="Recalculate selected ATS",
+                total_stages=1,
+            )
+            thread = threading.Thread(
+                target=run_ats_action,
+                args=(registry, action.action_id, store, job_ids),
+                daemon=True,
+            )
+        else:
+            bound_root = extension["project_root"]
+            if bound_root is None or not (bound_root / "Makefile").is_file():
+                return jsonify(message="Action is unavailable.", status="rejected"), 503
+            try:
+                stages = build_action_stages(
+                    project_root=bound_root,
+                    workflow=target,
+                    job_ids=job_ids,
+                    paths=paths,
+                    manual_profile=request.form.get("manual_pass_profile", "regular"),
+                    highlight=highlight_value == "1",
+                )
+            except Exception:  # noqa: BLE001 - invalid policy stays content-free.
+                return jsonify(
+                    message="Action request is invalid.", status="rejected"
+                ), 400
+            action = create_action(
+                registry,
+                label=ACTION_OPTIONS[target],
+                total_stages=len(stages),
+            )
+            thread = threading.Thread(
+                target=run_command_action,
+                args=(
+                    registry,
+                    action.action_id,
+                    extension["executor"],
+                    stages,
+                ),
+                daemon=True,
+            )
         thread.start()
-        return jsonify(action_id=action.action_id, status="accepted"), 202
+        return jsonify(
+            action_id=action.action_id,
+            refresh_url=view.index_url,
+            status="accepted",
+        ), 202
 
     @app.get("/actions/status")
     def action_status():
-        return jsonify(actions=_action_snapshots(extension["actions"]))
+        return jsonify(actions=action_snapshots(extension["actions"]))
 
     return app
 

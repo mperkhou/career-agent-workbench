@@ -312,7 +312,7 @@ def test_action_rejections_precede_executor_and_failures_are_generic(
     status = client.get("/actions/status").get_json()["actions"][0]
     assert status["status"] == "failed"
     assert status["return_code"] == 1
-    assert status["message"] == "Action failed."
+    assert status["message"] == "Stage 1 of 1 failed."
     assert "synthetic-private-exception" not in repr(status)
 
     unavailable = webapp.create_app(

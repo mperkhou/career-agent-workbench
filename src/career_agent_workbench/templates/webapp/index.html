@@ -27,7 +27,7 @@
       @media (max-width: 900px) { table { display: block; overflow-x: auto; } }
     </style>
   </head>
-  <body>
+  <body data-refresh-url="{{ view.index_url }}">
     <main>
       <header>
         <h1>Career Agent Workbench</h1>
@@ -140,7 +140,7 @@
         </table>
       </section>
 
-      <form id="bulk-actions-form" method="post" action="/actions/run">
+      <form id="bulk-actions-form" method="post" action="/actions/run" data-action-form="workflow">
         {% for name, value in view.form_items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         <section>
           <h2>Lifecycle and workflow actions</h2>
@@ -153,6 +153,14 @@
             <select id="target" name="target" required>
               {% for value, label in targets.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
             </select>
+            <label>Manual profile
+              <select name="manual_pass_profile">
+                <option value="economy">Economy</option>
+                <option value="regular" selected>Regular</option>
+                <option value="premium">Premium</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="highlight" value="1"> Highlight after valid workflow</label>
             <button type="submit">Run selected</button>
           </div>
         </section>
@@ -160,6 +168,8 @@
 
       <section id="action-status">
         <h2>Action status</h2>
+        <p id="web-feedback" class="muted" role="status">Ready.</p>
+        <p id="action-progress" class="muted"></p>
         <ul class="status-list">
           {% for action in actions %}
             <li><strong>{{ action.target }}</strong> — {{ action.status }} · {{ action.message }}</li>
@@ -170,5 +180,6 @@
         <a href="/actions/status">View status JSON</a>
       </section>
     </main>
+    <script src="/static/webapp/app.js" defer></script>
   </body>
 </html>

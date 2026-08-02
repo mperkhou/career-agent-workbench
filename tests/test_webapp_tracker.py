@@ -210,6 +210,7 @@ def test_gets_are_read_only_and_lifecycle_mutations_preserve_resume_state(
 
     client = app.test_client()
     assert client.get("/").status_code == 200
+    assert client.get("/applications/add").status_code == 200
     assert client.get("/actions/status").status_code == 200
     assert store.get_application("job-a") == before
     assert store.list_resume_variants("job-a") == before_variants

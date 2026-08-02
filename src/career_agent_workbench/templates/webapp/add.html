@@ -18,12 +18,14 @@
       .muted { color: #687386; }
     </style>
   </head>
-  <body>
+  <body data-refresh-url="{{ view.index_url }}">
     <main>
       <p><a href="{{ view.index_url }}">← Return to preserved tracker view</a></p>
       <section>
         <h1>Add / Seed applications</h1>
         <p class="muted">Use public guest access only. Submitted URL lists are normalized, deduplicated, and bounded.</p>
+        <p id="web-feedback" class="muted" role="status">Ready.</p>
+        <p id="action-progress" class="muted"></p>
       </section>
 
       <section>
@@ -66,5 +68,6 @@
         </form>
       </section>
     </main>
+    <script src="/static/webapp/app.js" defer></script>
   </body>
 </html>

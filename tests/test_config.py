@@ -1174,7 +1174,6 @@ def test_env_example_is_parseable_trackable_and_public_safe() -> None:
         f"{CANONICAL}WORKSPACE": "../career-agent-workbench-ops",
         f"{CANONICAL}PRIVATE_ENV_FILE": "../career-agent-workbench-ops/.env",
     }
-    assert not (repository / ".env").exists()
     ignored_env = subprocess.run(
         ["git", "check-ignore", "--no-index", "--quiet", ".env"],
         cwd=repository,
@@ -1185,8 +1184,17 @@ def test_env_example_is_parseable_trackable_and_public_safe() -> None:
         cwd=repository,
         check=False,
     )
+    tracked_env = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", ".env"],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     assert ignored_env.returncode == 0
     assert ignored_example.returncode == 1
+    assert tracked_env.returncode == 1
+    assert tracked_env.stdout == ""
 
 
 def test_import_is_side_effect_free_in_fresh_interpreter(tmp_path: Path) -> None:

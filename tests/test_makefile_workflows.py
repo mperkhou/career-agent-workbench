@@ -52,12 +52,17 @@ def _dry_run(target: str, *variables: str) -> str:
     return completed.stdout
 
 
-def test_setup_targets_use_one_public_venv_and_explicit_chromium_install() -> None:
-    venv = _dry_run("venv")
-    browser = _dry_run("install-browser")
-    assert 'python3 -m venv ".venv"' in venv
-    assert '.venv/bin/python -m pip install -e ".[dev,browser]"' in venv
-    assert ".venv/bin/python -m playwright install chromium" in browser
+def test_setup_targets_use_one_public_venv_and_explicit_chromium_install(
+    tmp_path: Path,
+) -> None:
+    isolated_venv = tmp_path / "operator-venv"
+    assert not isolated_venv.exists()
+
+    venv = _dry_run("venv", f"VENV={isolated_venv}")
+    browser = _dry_run("install-browser", f"VENV={isolated_venv}")
+    assert f'python3 -m venv "{isolated_venv}"' in venv
+    assert f'{isolated_venv}/bin/python -m pip install -e ".[dev,browser]"' in venv
+    assert f"{isolated_venv}/bin/python -m playwright install chromium" in browser
     assert "curl" not in browser
     assert "ollama" not in browser.casefold()
 

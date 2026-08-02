@@ -37,6 +37,7 @@ STATE_OPTIONS = {
     "--master-resume-text",
     "--blacklist-path",
     "--tmp-dir",
+    "--download-dir",
 }
 
 

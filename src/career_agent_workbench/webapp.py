@@ -8,8 +8,9 @@ import threading
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
-from flask import Flask, jsonify, redirect, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request
 
 from career_agent_workbench.application_state import ApplicationStateStore
 from career_agent_workbench.cli_paths import (
@@ -40,6 +41,13 @@ from career_agent_workbench.webapp_ingestion import (
     ingest_generic_urls,
     ingest_linkedin_urls,
     parse_job_url_batch,
+)
+from career_agent_workbench.webapp_artifacts import (
+    StoredArtifact,
+    copy_artifact_to_downloads,
+    selected_resume_artifact,
+    variant_resume_artifact,
+    variant_review,
 )
 from career_agent_workbench.webapp_tracker import (
     TRACKER_DIRECTIONS,
@@ -80,6 +88,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "master_resume_text",
         "blacklist",
         "tmp_dir",
+        "download_dir",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=_port, default=8765)
@@ -174,6 +183,21 @@ def _bounded_form_integer(name: str, *, upper: int) -> int:
     if not 1 <= selected <= upper:
         raise ValueError
     return selected
+
+
+def _artifact_response(
+    artifact: StoredArtifact,
+    *,
+    attachment: bool,
+) -> Response:
+    disposition = "attachment" if attachment else "inline"
+    return Response(
+        artifact.content,
+        content_type=artifact.mime_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{artifact.filename}"'
+        },
+    )
 
 
 def create_app(
@@ -468,6 +492,104 @@ def create_app(
     @app.get("/actions/status")
     def action_status():
         return jsonify(actions=action_snapshots(extension["actions"]))
+
+    def _selected_artifact(job_id: str, kind: str, *, attachment: bool):
+        try:
+            artifact = selected_resume_artifact(store, job_id, kind)
+        except Exception:  # noqa: BLE001 - missing artifacts stay content-free.
+            return "Artifact was not found.", 404
+        return _artifact_response(artifact, attachment=attachment)
+
+    def _variant_artifact(
+        job_id: str,
+        variant_key: str,
+        kind: str,
+        *,
+        attachment: bool,
+    ):
+        try:
+            artifact = variant_resume_artifact(store, job_id, variant_key, kind)
+        except Exception:  # noqa: BLE001 - exact-target failures are generic.
+            return "Artifact was not found.", 404
+        return _artifact_response(artifact, attachment=attachment)
+
+    @app.get("/resumes/<job_id>")
+    def selected_resume_pdf(job_id: str):
+        return _selected_artifact(job_id, "pdf", attachment=False)
+
+    @app.get("/resumes/<job_id>/download")
+    def download_selected_resume_pdf(job_id: str):
+        return _selected_artifact(job_id, "pdf", attachment=True)
+
+    @app.get("/resume-html/<job_id>")
+    def selected_resume_html(job_id: str):
+        return _selected_artifact(job_id, "html", attachment=False)
+
+    @app.get("/resume-html/<job_id>/download")
+    def download_selected_resume_html(job_id: str):
+        return _selected_artifact(job_id, "html", attachment=True)
+
+    @app.get("/resumes/<job_id>/variants/<variant_key>")
+    def variant_resume_pdf(job_id: str, variant_key: str):
+        return _variant_artifact(job_id, variant_key, "pdf", attachment=False)
+
+    @app.get("/resumes/<job_id>/variants/<variant_key>/download")
+    def download_variant_resume_pdf(job_id: str, variant_key: str):
+        return _variant_artifact(job_id, variant_key, "pdf", attachment=True)
+
+    @app.get("/resume-html/<job_id>/variants/<variant_key>")
+    def variant_resume_html(job_id: str, variant_key: str):
+        return _variant_artifact(job_id, variant_key, "html", attachment=False)
+
+    @app.get("/resume-html/<job_id>/variants/<variant_key>/download")
+    def download_variant_resume_html(job_id: str, variant_key: str):
+        return _variant_artifact(job_id, variant_key, "html", attachment=True)
+
+    @app.get("/resumes/<job_id>/variants")
+    def review_resume_variants(job_id: str):
+        try:
+            view = _tracker_view()
+            snapshot = store.get_workflow_snapshot(job_id)
+            comparisons = variant_review(snapshot)
+        except TrackerViewError:
+            return "Variant view is invalid.", 400
+        except Exception:  # noqa: BLE001 - state failures stay content-free.
+            return "Application was not found.", 404
+        return render_template(
+            "webapp/variant_review.html",
+            application=snapshot.application,
+            comparisons=comparisons,
+            view=view,
+            view_query=urlencode(view.query_items),
+        )
+
+    @app.post("/resumes/<job_id>/variants/<variant_key>/use")
+    def use_resume_variant(job_id: str, variant_key: str):
+        try:
+            view = _tracker_view(form=True)
+            store.select_resume_variant(job_id, variant_key)
+        except Exception:  # noqa: BLE001 - mutation failures stay content-free.
+            return "Resume selection is invalid.", 400
+        return redirect(f"/resumes/{job_id}/variants?{urlencode(view.query_items)}")
+
+    @app.post("/resumes/<job_id>/variants/reset")
+    def reset_resume_variant(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            store.reset_resume_variant_selection(job_id)
+        except Exception:  # noqa: BLE001 - mutation failures stay content-free.
+            return "Resume selection is invalid.", 400
+        return redirect(f"/resumes/{job_id}/variants?{urlencode(view.query_items)}")
+
+    @app.post("/resumes/<job_id>/copy-to-downloads")
+    def copy_selected_resume(job_id: str):
+        try:
+            view = _tracker_view(form=True)
+            artifact = selected_resume_artifact(store, job_id, "pdf")
+            copy_artifact_to_downloads(paths, artifact)
+        except Exception:  # noqa: BLE001 - private copy failures stay generic.
+            return "Resume copy could not be completed.", 400
+        return redirect(view.index_url)
 
     return app
 

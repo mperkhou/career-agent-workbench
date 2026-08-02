@@ -39,6 +39,7 @@ def _paths(tmp_path: Path, name: str = "workspace") -> WorkspacePaths:
         master_resume_text=workspace / "resume-independent.txt",
         blacklist=workspace / "blacklist-independent.txt",
         tmp_dir=workspace / "temporary-independent",
+        download_dir=workspace / "downloads-independent",
     )
 
 
@@ -101,6 +102,7 @@ def test_web_main_loads_once_and_injects_exact_runtime(
         assert args.master_resume_text == paths.master_resume_text
         assert args.blacklist == paths.blacklist
         assert args.tmp_dir == paths.tmp_dir
+        assert args.download_dir == paths.download_dir
         return runtime
 
     def fake_create(supplied_runtime, *, project_root):
@@ -129,6 +131,8 @@ def test_web_main_loads_once_and_injects_exact_runtime(
                 str(paths.blacklist),
                 "--tmp-dir",
                 str(paths.tmp_dir),
+                "--download-dir",
+                str(paths.download_dir),
                 "--project-root",
                 str(project_root),
                 "--host",

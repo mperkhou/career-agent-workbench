@@ -48,6 +48,7 @@ _PATH_ARGUMENTS: Mapping[str, tuple[tuple[str, ...], str]] = {
         "Company blacklist override.",
     ),
     "tmp_dir": (("--tmp-dir",), "Temporary directory override."),
+    "download_dir": (("--download-dir",), "Private download directory override."),
 }
 
 
@@ -98,6 +99,7 @@ def runtime_overrides_from_namespace(
         "database",
         "blacklist",
         "tmp_dir",
+        "download_dir",
     ):
         value = getattr(args, field_name, None)
         if value is not None:

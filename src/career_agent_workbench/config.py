@@ -63,6 +63,7 @@ class WorkspaceMember(StrEnum):
     DATABASE = "database"
     BLACKLIST = "blacklist"
     TMP_DIR = "tmp_dir"
+    DOWNLOAD_DIR = "download_dir"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +78,7 @@ class RuntimeOverrides:
     database: str | os.PathLike[str] | None = None
     blacklist: str | os.PathLike[str] | None = None
     tmp_dir: str | os.PathLike[str] | None = None
+    download_dir: str | os.PathLike[str] | None = None
     user_agent: str | None = None
     timeout_seconds: float | str | None = None
     max_results: int | str | None = None
@@ -120,6 +122,7 @@ class WorkspacePaths:
     database: Path | None = None
     blacklist: Path | None = None
     tmp_dir: Path | None = None
+    download_dir: Path | None = None
 
     def __repr__(self) -> str:
         configured = (
@@ -213,6 +216,7 @@ _WORKSPACE_SPECS = (
     ),
     ("blacklist", "BLACKLIST", (".blacklist",)),
     ("tmp_dir", "TMP_DIR", ("tmp",)),
+    ("download_dir", "DOWNLOAD_DIR", ("downloads",)),
 )
 
 _STRING_SETTING_SPECS = (

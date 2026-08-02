@@ -113,10 +113,19 @@
                   HTML: {{ "yes" if application.resume_html is not none else "no" }} ·
                   PDF: {{ "yes" if application.resume_pdf is not none else "no" }}<br>
                   ATS: {{ application.ats.score if application.ats.score is not none else "—" }}
-                  {% if application.ats.formatting_risk %}({{ application.ats.formatting_risk }}){% endif %}
+                  {% if application.ats.formatting_risk %}({{ application.ats.formatting_risk }}){% endif %}<br>
+                  <a href="/applications/{{ application.job_id }}/jod?{{ view.query_items|urlencode }}">JOD</a> ·
+                  <a href="/resumes/{{ application.job_id }}/variants?{{ view.query_items|urlencode }}">Variants</a> ·
+                  <a href="/resumes/{{ application.job_id }}/edit?{{ view.query_items|urlencode }}">Edit</a><br>
+                  <a href="/resume-html/{{ application.job_id }}">HTML</a> ·
+                  <a href="/resumes/{{ application.job_id }}">PDF</a> ·
+                  <a href="/resumes/{{ application.job_id }}/download">Download</a>
                 </td>
                 <td>
                   CLO: {{ "yes" if application.cover_letter is not none or application.cover_letter_pdf is not none else "no" }}<br>
+                  <a href="/applications/{{ application.job_id }}/cover-letter?{{ view.query_items|urlencode }}">Edit</a> ·
+                  <a href="/cover-letters/{{ application.job_id }}">View</a> ·
+                  <a href="/cover-letters/{{ application.job_id }}/download">Download</a><br>
                   Archived: {{ application.archived_at or "no" }}
                 </td>
                 <td>

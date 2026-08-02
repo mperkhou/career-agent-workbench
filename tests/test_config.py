@@ -95,6 +95,7 @@ WORKSPACE_CASES = (
     ("database", "DATABASE"),
     ("blacklist", "BLACKLIST"),
     ("tmp_dir", "TMP_DIR"),
+    ("download_dir", "DOWNLOAD_DIR"),
 )
 
 
@@ -985,6 +986,7 @@ def test_conventional_members_are_exact_and_sibling_independent(
         database=root / "output/tracking/applications.sqlite3",
         blacklist=root / ".blacklist",
         tmp_dir=root / "tmp",
+        download_dir=root / "downloads",
     )
 
 

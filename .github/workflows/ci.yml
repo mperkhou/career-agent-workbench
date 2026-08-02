@@ -11,6 +11,8 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      PYTHON: python
     steps:
       - uses: actions/checkout@v6
         with:

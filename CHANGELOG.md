@@ -26,6 +26,9 @@
 - Accepted only the deterministic clearing of non-resolving automatic resume
   selections during copied-state initialization, while preserving every valid
   automatic selection, explicit manual selection, variant, and artifact.
+- Aligned migration artifact evidence with canonical resume variants,
+  no-variant application fallbacks, backups, and cover letters so derived
+  application projections may be safely resynchronized from unchanged state.
 
 ### Safety and governance
 

@@ -440,7 +440,7 @@ def _inspect(database: Path) -> _DatabaseEvidence:
             if lineage_supported
             else ()
         )
-        artifacts = _artifact_rows(connection, columns)
+        artifacts = _artifact_rows(connection, columns, variant_columns)
         artifact_count, artifact_digest = _artifact_evidence(artifacts)
         counts = DatabaseCounts(
             table_count=len(tables),
@@ -669,33 +669,73 @@ def _lineage_valid(
 
 def _artifact_rows(
     connection: sqlite3.Connection,
-    columns: frozenset[str],
-) -> Iterable[sqlite3.Row]:
-    selected = tuple(
-        name
-        for name in (
-            "application_resume_object",
-            "application_resume_backup_object",
-            "resume_html_content",
-            "resume_content",
-            "cover_letter_object",
-            "cover_letter_content",
-        )
-        if name in columns
-    )
-    if "job_id" not in columns or not selected:
+    application_columns: frozenset[str],
+    variant_columns: frozenset[str],
+) -> Iterable[tuple[Sequence[Any], int]]:
+    if "job_id" not in application_columns:
         return ()
-    names = ", ".join(_quote(name) for name in selected)
-    return connection.execute(
-        f"SELECT job_id, {names} FROM applications ORDER BY job_id COLLATE BINARY"
+
+    rows: list[tuple[Sequence[Any], int]] = []
+    variant_identity = {"job_id", "variant_key"} <= variant_columns
+    resume_fields = (
+        "application_resume_object",
+        "resume_html_content",
+        "resume_content",
     )
+    if variant_identity:
+        selected = ", ".join(
+            _artifact_column(name, variant_columns) for name in resume_fields
+        )
+        variants = connection.execute(
+            "SELECT 'variant', job_id, variant_key, "
+            f"{selected} FROM application_resume_variants "
+            "ORDER BY job_id COLLATE BINARY, variant_key COLLATE BINARY"
+        ).fetchall()
+        rows.extend((row, 3) for row in variants)
+
+    selected = ", ".join(
+        _artifact_column(name, application_columns) for name in resume_fields
+    )
+    fallback_clause = (
+        "WHERE NOT EXISTS (SELECT 1 FROM application_resume_variants AS variant "
+        "WHERE variant.job_id = applications.job_id)"
+        if variant_identity
+        else ""
+    )
+    fallbacks = connection.execute(
+        "SELECT 'fallback', job_id, "
+        f"{selected} FROM applications {fallback_clause} "
+        "ORDER BY job_id COLLATE BINARY"
+    ).fetchall()
+    rows.extend((row, 2) for row in fallbacks)
+
+    supplemental_fields = (
+        "application_resume_backup_object",
+        "cover_letter_object",
+        "cover_letter_content",
+    )
+    selected = ", ".join(
+        _artifact_column(name, application_columns) for name in supplemental_fields
+    )
+    supplemental = connection.execute(
+        "SELECT 'application', job_id, "
+        f"{selected} FROM applications ORDER BY job_id COLLATE BINARY"
+    ).fetchall()
+    rows.extend((row, 2) for row in supplemental)
+    return rows
 
 
-def _artifact_evidence(rows: Iterable[sqlite3.Row]) -> tuple[int, bytes]:
+def _artifact_column(name: str, columns: frozenset[str]) -> str:
+    return _quote(name) if name in columns else f"NULL AS {_quote(name)}"
+
+
+def _artifact_evidence(
+    rows: Iterable[tuple[Sequence[Any], int]],
+) -> tuple[int, bytes]:
     count = 0
     byte_count = 0
     digest = hashlib.sha256()
-    for row in rows:
+    for row, metadata_count in rows:
         for value in row:
             encoded = (
                 b""
@@ -706,7 +746,9 @@ def _artifact_evidence(rows: Iterable[sqlite3.Row]) -> tuple[int, bytes]:
             digest.update(len(encoded).to_bytes(8, "big"))
             digest.update(encoded)
             byte_count += len(encoded)
-        count += sum(1 for value in row[1:] if value not in (None, "", b""))
+        count += sum(
+            1 for value in row[metadata_count:] if value not in (None, "", b"")
+        )
         if count > MAX_COPY_FILES or byte_count > MAX_COPY_BYTES:
             raise ValueError
     return count, digest.digest()

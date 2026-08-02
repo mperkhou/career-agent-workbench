@@ -15,6 +15,7 @@ from career_agent_workbench.application_state import (
     ApplicationMetadata,
     ApplicationStateStore,
     AtsFields,
+    ResumeVariantWrite,
 )
 from career_agent_workbench.config import WorkspacePaths
 from career_agent_workbench.ops_migration import (
@@ -68,7 +69,82 @@ def _synthetic_database(tmp_path: Path) -> tuple[ApplicationStateStore, Path]:
         resume_pdf=b"synthetic-resume-pdf",
         ats=AtsFields(score=80),
     )
+    store.upsert_resume_variant(
+        "fictional-job",
+        ResumeVariantWrite(
+            variant_key="v1",
+            variant_label="Synthetic first draft",
+            source="synthetic",
+            application_resume_yaml="profile:\n  summary: Synthetic candidate\n",
+            resume_html="<main>Synthetic resume</main>",
+            resume_pdf=b"synthetic-resume-pdf",
+            ats=AtsFields(score=80),
+        ),
+    )
     return store, database
+
+
+def _artifact_database(tmp_path: Path, *, with_variants: bool) -> Path:
+    workspace = tmp_path / (
+        "variant-workspace" if with_variants else "fallback-workspace"
+    )
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    database = workspace / "state.sqlite3"
+    store = ApplicationStateStore(
+        WorkspacePaths(root=workspace, database=database, output_dir=output)
+    )
+    store.initialize()
+    store.upsert_application(
+        ApplicationMetadata(
+            job_id="fictional-canonical-artifact",
+            company="Example Cooperative",
+            job_title="Reliability Engineer",
+            job_url="https://jobs.example.com/fictional-canonical-artifact",
+            source="example_public",
+        )
+    )
+    if with_variants:
+        store.upsert_resume_variant(
+            "fictional-canonical-artifact",
+            ResumeVariantWrite(
+                variant_key="v1",
+                variant_label="Synthetic first draft",
+                source="synthetic",
+                application_resume_yaml="profile:\n  summary: Synthetic v1\n",
+                resume_html="<main>Synthetic v1</main>",
+                resume_pdf=b"synthetic-v1-pdf",
+            ),
+        )
+        store.upsert_resume_variant(
+            "fictional-canonical-artifact",
+            ResumeVariantWrite(
+                variant_key="v2",
+                variant_label="Synthetic second draft",
+                source="synthetic",
+                parent_variant_key="v1",
+                application_resume_yaml="profile:\n  summary: Synthetic v2\n",
+                resume_html="<main>Synthetic v2</main>",
+                resume_pdf=b"synthetic-v2-pdf",
+            ),
+        )
+        store.select_resume_variant("fictional-canonical-artifact", "v2")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE applications SET application_resume_object = ?, "
+            "resume_html_content = ?, resume_content = ?, "
+            "application_resume_backup_object = ?, cover_letter_object = ?, "
+            "cover_letter_content = ?",
+            (
+                "profile:\n  summary: Synthetic stale projection\n",
+                "<main>Synthetic stale projection</main>",
+                b"synthetic-stale-projection-pdf",
+                "profile:\n  summary: Synthetic backup\n",
+                '{"letter":"Synthetic cover letter"}',
+                b"synthetic-cover-letter-pdf",
+            ),
+        )
+    return database
 
 
 def test_materialize_and_copy_explicit_members_without_following_links(
@@ -223,6 +299,147 @@ def test_disposable_initialization_preserves_counts_content_and_lineage(
         public_repository=PUBLIC_ROOT,
     )
     assert not disposable.exists()
+
+
+def test_canonical_artifact_exact_equality_passes(tmp_path: Path) -> None:
+    source = _artifact_database(tmp_path, with_variants=True)
+    evidence = ops_migration._inspect(source)
+
+    comparison = ops_migration._compare(
+        evidence,
+        evidence,
+        source_unchanged=True,
+    )
+
+    assert comparison["passed"] is True
+    assert comparison["artifact_count_equal"] is True
+    assert comparison["artifact_digest_equal"] is True
+
+
+def test_stale_manual_v2_projection_may_resynchronize(tmp_path: Path) -> None:
+    source = _artifact_database(tmp_path, with_variants=True)
+    disposable = tmp_path / "stale-projection-disposable"
+
+    result = validate_disposable_database_copy(
+        source,
+        disposable,
+        database_relative=Path("state/copied.sqlite3"),
+        public_repository=PUBLIC_ROOT,
+    )
+
+    assert result.passed is True
+    assert result.selection_equal is True
+    assert result.artifact_count_equal is True
+    assert result.artifact_digest_equal is True
+    with sqlite3.connect(disposable / "state/copied.sqlite3") as connection:
+        application = connection.execute(
+            "SELECT application_resume_object, resume_html_content, resume_content, "
+            "selected_resume_variant, resume_variant_selection_mode "
+            "FROM applications"
+        ).fetchone()
+        selected_v2 = connection.execute(
+            "SELECT application_resume_object, resume_html_content, resume_content "
+            "FROM application_resume_variants WHERE variant_key = 'v2'"
+        ).fetchone()
+    assert application[:3] == selected_v2
+    assert application[3:] == ("v2", "manual")
+    rendered = repr(result)
+    assert "fictional-canonical-artifact" not in rendered
+    assert "Synthetic stale projection" not in rendered
+    assert cleanup_disposable_workspace(
+        disposable,
+        public_repository=PUBLIC_ROOT,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("application_resume_object", "resume_html_content", "resume_content"),
+)
+def test_variant_artifact_mutation_fails(tmp_path: Path, field: str) -> None:
+    source = _artifact_database(tmp_path, with_variants=True)
+    baseline = ops_migration._inspect(source)
+    value: str | bytes = (
+        b"mutated-synthetic-pdf" if field == "resume_content" else "mutated synthetic"
+    )
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            f"UPDATE application_resume_variants SET {field} = ? WHERE variant_key = 'v2'",
+            (value,),
+        )
+    migrated = ops_migration._inspect(source)
+
+    comparison = ops_migration._compare(
+        baseline,
+        migrated,
+        source_unchanged=True,
+    )
+
+    assert comparison["passed"] is False
+    assert comparison["artifact_count_equal"] is True
+    assert comparison["artifact_digest_equal"] is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("application_resume_object", "resume_html_content", "resume_content"),
+)
+def test_no_variant_fallback_artifact_mutation_fails(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    source = _artifact_database(tmp_path, with_variants=False)
+    baseline = ops_migration._inspect(source)
+    value: str | bytes = (
+        b"mutated-synthetic-pdf" if field == "resume_content" else "mutated synthetic"
+    )
+    with sqlite3.connect(source) as connection:
+        connection.execute(f"UPDATE applications SET {field} = ?", (value,))
+    migrated = ops_migration._inspect(source)
+
+    comparison = ops_migration._compare(
+        baseline,
+        migrated,
+        source_unchanged=True,
+    )
+
+    assert comparison["passed"] is False
+    assert comparison["artifact_count_equal"] is True
+    assert comparison["artifact_digest_equal"] is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "application_resume_backup_object",
+        "cover_letter_object",
+        "cover_letter_content",
+    ),
+)
+def test_backup_and_cover_letter_artifact_mutation_fails(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    source = _artifact_database(tmp_path, with_variants=True)
+    baseline = ops_migration._inspect(source)
+    value: str | bytes = (
+        b"mutated-synthetic-pdf"
+        if field == "cover_letter_content"
+        else "mutated synthetic"
+    )
+    with sqlite3.connect(source) as connection:
+        connection.execute(f"UPDATE applications SET {field} = ?", (value,))
+    migrated = ops_migration._inspect(source)
+
+    comparison = ops_migration._compare(
+        baseline,
+        migrated,
+        source_unchanged=True,
+    )
+
+    assert comparison["passed"] is False
+    assert comparison["artifact_count_equal"] is True
+    assert comparison["artifact_digest_equal"] is False
 
 
 def test_disposable_initialization_accepts_only_invalid_automatic_clear(

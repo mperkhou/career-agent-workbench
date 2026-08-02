@@ -13,6 +13,10 @@ from career_agent_workbench import (
     resume_refinement_cli,
     webapp,
 )
+from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
+    ApplicationStateStore,
+)
 from career_agent_workbench.config import (
     RuntimeConfig,
     RuntimeOverrides,
@@ -352,7 +356,7 @@ def test_jod_audit_apply_refreshes_ats_after_one_default_backup(monkeypatch) -> 
 
     class FakeStore:
         def list_applications(self, scope, *, limit):
-            assert scope == "all" and limit == 10_000
+            assert scope == "all" and limit == MAX_QUERY_RESULTS
             return (record,)
 
         def store_jod(self, job_id, **kwargs):
@@ -394,6 +398,28 @@ def test_jod_audit_apply_refreshes_ats_after_one_default_backup(monkeypatch) -> 
     assert result["ats_fields_changed"] == 1
     assert len(stored) == 1
     assert stored[0]["ats"].score == 81
+
+
+def test_jod_audit_uses_real_store_result_bound(tmp_path: Path) -> None:
+    paths = WorkspacePaths(database=(tmp_path / "state.sqlite3").absolute())
+    store = ApplicationStateStore(paths)
+    store.initialize()
+
+    result = jod_cleaner_audit.audit_tracker_state(
+        store,
+        apply=False,
+        sample_limit=10,
+    )
+
+    assert result == {
+        "total_rows": 0,
+        "usable_source_rows": 0,
+        "changed_rows": 0,
+        "applied_rows": 0,
+        "sample_changed_count": 0,
+        "ats_fields_changed": 0,
+        "backup_created": False,
+    }
 
 
 def test_jod_sqlite_backup_is_read_only_and_user_only(tmp_path: Path) -> None:

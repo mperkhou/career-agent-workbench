@@ -11,7 +11,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from career_agent_workbench.application_state import ApplicationStateStore, AtsFields
+from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
+    ApplicationStateStore,
+    AtsFields,
+)
 from career_agent_workbench.ats import calculate_ats_diagnostics
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
@@ -57,7 +61,7 @@ def audit_tracker_state(
 ) -> dict[str, object]:
     """Compare bounded stored source/prompt pairs without direct SQLite access."""
 
-    records = store.list_applications("all", limit=10_000)
+    records = store.list_applications("all", limit=MAX_QUERY_RESULTS)
     changed: list[str] = []
     usable = 0
     ats_fields_changed = 0

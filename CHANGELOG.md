@@ -18,6 +18,8 @@
 - Added guarded, explicit-path ops workspace materialization, no-follow member
   copying, online SQLite backup, disposable-only initialization, sanitized
   invariant comparison, and marker-protected disposable cleanup.
+- Fixed the JOD audit launcher to honor the state layer's exported result bound
+  across direct CLI and Make execution.
 
 ### Safety and governance
 

@@ -102,11 +102,16 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
             assert parsed.hostname is not None
             assert parsed.hostname.endswith(".example.test")
     source_text = (SOURCE / "profile/MP-MASTER-RESUME.txt").read_text("utf-8")
-    assert source_text.startswith("Avery Demo\nFictional Public Resume")
-    assert "Avery Demo" in source_text
-    assert "avery.demo@example.test" in source_text
-    assert "Nimbus Quay Example Labs" in source_text
-    assert "Cedar & Comet Example Cooperative" in source_text
+    assert source_text.startswith("Tessa Rowan\nSenior Platform & Reliability Engineer")
+    assert "tessa.rowan@example.test" in source_text
+    assert "https://tessa-rowan.example.test" in source_text
+    assert (
+        "The person, organizations, locations, dates, credentials, and project "
+        "examples in this resume are fictionalized for a public demonstration"
+        in source_text
+    )
+    assert "Northbridge Systems Cooperative" in source_text
+    assert "Alder Creek Medical Group" in source_text
     section_headings = (
         "Professional Summary",
         "Core Technical Skills",
@@ -126,13 +131,13 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     assert sum(line.startswith("- ") for line in skills_text.splitlines()) == 14
 
     role_markers = (
-        "Nimbus Quay Example Labs | Remote",
-        "Cedar & Comet Example Cooperative | Example City, ZZ",
-        "Lantern Vale Health Network | Northport, ZZ",
-        "Harbor Thread Media Collective | Port Mason, ZZ",
-        "Blue Mesa Imaging Works | Ridgeview, ZZ",
-        "Meridian Orchard Research Studio | Lakehaven, ZZ",
-        "Northstar Example University | Lakehaven, ZZ",
+        "Northbridge Systems Cooperative | Remote",
+        "Alder Creek Medical Group | Fort Haven, CO",
+        "Grayhaven Health Network | Pinehaven, CO",
+        "Harborline Media Partners | Cedar Ridge, CO",
+        "Lumina Imaging Systems | Silver Falls, CO",
+        "Calder Ridge Research Institute | Fairmont, CO",
+        "Redstone Valley University | Fairmont, CO",
         "Education",
     )
     role_bullets = (17, 7, 9, 7, 10, 7, 3)
@@ -153,6 +158,14 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     assert sum(line.startswith("- ") for line in education_text.splitlines()) == 2
     assert sum(line.startswith("- ") for line in certifications_text.splitlines()) == 3
     assert "https://code.example.test/" in source_text
+    normal_entries = source_text.split("\nProfessional Summary\n", 1)[1].replace(
+        "example.test", "reserved-domain"
+    )
+    placeholder_words = {"demo", "example", "zz", "invented", "fictional"}
+    visible_words = {
+        word.strip(".,:;()[]").casefold() for word in normal_entries.split()
+    }
+    assert placeholder_words.isdisjoint(visible_words)
 
     job = JobDetails.model_validate_json(
         (SOURCE / "jobs/demo-platform-engineer.json").read_text("utf-8")

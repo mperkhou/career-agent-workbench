@@ -19,6 +19,18 @@
 - Bound P03/G03 to a separate immutable post-patch legacy snapshot while
   preserving the accepted pre-patch G01/G02 evidence, preventing live archived
   repository drift from rewriting completed gate history.
+- Restored dependent ingestion composition, bounded selected-draft sync,
+  survivor-aware progress and retry controls, and declared-parent variant
+  review with content-free evidence summaries.
+- Restored dense accessible tracker status, variant and timestamp cues, safe
+  artifact targets, and a lossless structured resume editor with revision,
+  selection, revert, sync, and advanced-YAML safeguards.
+- Added an accessible sanitized cover-letter rich editor and deterministic
+  one-page representative Letter rendering without weakening transactional
+  artifact or state-isolation behavior.
+- Completed the bounded manual-pass skills compatibility repair, explicit
+  wheel/sdist membership, full synthetic regression suite, offline Chromium
+  workbench, injected MCP stdio, and content-free full-ops compatibility gate.
 
 ## [1.1.0] - 2026-08-02
 

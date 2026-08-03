@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+import yaml
 from reportlab.pdfgen import canvas
 
 from career_agent_workbench import webapp
@@ -20,8 +21,12 @@ from career_agent_workbench.webapp_actions import (
     ActionRegistry,
     action_snapshots,
     build_action_stages,
+    build_ingestion_stages,
     create_action,
+    parse_workflow_composition,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _InlineThread:
@@ -220,7 +225,7 @@ def test_exact_make_allowlist_composites_force_manual_profile_and_highlight(
             )
 
 
-def test_composite_action_runs_in_order_stops_first_failure_and_hides_details(
+def test_composite_action_failure_is_bounded_and_hides_details(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -261,12 +266,142 @@ def test_composite_action_runs_in_order_stops_first_failure_and_hides_details(
     ]
     status = app.test_client().get("/actions/status").get_json()["actions"][0]
     assert status["status"] == "failed"
-    assert status["completed_stages"] == 1
+    assert status["completed_stages"] == 2
     assert status["total_stages"] == 4
     assert status["current_stage"] == "Refine draft resumes"
-    assert status["message"] == "Stage 2 of 4 failed."
+    assert status["successful_steps"] == 1
+    assert status["failed_steps"] == 1
+    assert status["skipped_steps"] == 2
+    assert status["failed_work"] == [
+        {
+            "job_id": "job-a",
+            "stage": "Refine draft resumes",
+            "stage_index": 2,
+        }
+    ]
+    assert status["message"] == "Action failed for every selected job."
     assert "synthetic-private-command-detail" not in repr(status)
     assert all("Running" not in message for message in status["messages"])
+
+
+def test_ingestion_composition_dependencies_and_selected_stages_are_exact(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    project = _project(tmp_path)
+    for options in (
+        {"run_v1": False, "run_v2": True, "run_manual": False, "run_highlight": False},
+        {"run_v1": True, "run_v2": False, "run_manual": True, "run_highlight": False},
+        {"run_v1": False, "run_v2": False, "run_manual": False, "run_highlight": True},
+    ):
+        with pytest.raises(ValueError, match="Workflow composition is invalid"):
+            parse_workflow_composition(**options, manual_profile="regular")
+
+    composition = parse_workflow_composition(
+        run_v1=True,
+        run_v2=True,
+        run_manual=True,
+        run_highlight=True,
+        manual_profile="premium",
+    )
+    stages = build_ingestion_stages(
+        project_root=project,
+        job_ids=("job-a", "job-b"),
+        paths=paths,
+        composition=composition,
+    )
+    assert [stage.argv[3] for stage in stages] == [
+        "regenerate-draft-resumes",
+        "refine-draft-resumes",
+        "manual-pass-resumes",
+        "highlight-draft-resumes",
+    ]
+    assert "MANUAL_PASS_PROFILE=premium" in stages[2].argv
+    assert "HIGHLIGHT_RESUME_VARIANT=manual" in stages[3].argv
+
+
+def test_partial_survivor_retry_resumes_failed_stage_without_repeating_survivor(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    project = _project(tmp_path)
+    commands: list[tuple[str, ...]] = []
+    failed_once = False
+
+    def executor(argv) -> int:
+        nonlocal failed_once
+        command = tuple(argv)
+        commands.append(command)
+        if (
+            command[3] == "refine-draft-resumes"
+            and "JOB_IDS=job-a" in command
+            and not failed_once
+        ):
+            failed_once = True
+            raise RuntimeError("synthetic-sensitive-stage-detail")
+        return 0
+
+    monkeypatch.setattr(webapp.threading, "Thread", _InlineThread)
+    app = webapp.create_app(
+        _runtime(paths),
+        project_root=project,
+        command_executor=executor,
+    )
+    _seed(app, "job-a", "job-b")
+    client = app.test_client()
+    response = client.post(
+        "/actions/run",
+        data={
+            "target": "v1-v2-manual",
+            "manual_pass_profile": "regular",
+            "highlight": "1",
+            "job_id": ["job-a", "job-b"],
+        },
+    )
+    assert response.status_code == 202
+    original_id = response.get_json()["action_id"]
+    original = next(
+        item
+        for item in client.get("/actions/status").get_json()["actions"]
+        if item["id"] == original_id
+    )
+    assert original["status"] == "partial"
+    assert original["completed_jobs"] == 1
+    assert original["total_jobs"] == 2
+    assert original["retryable"] is True
+    assert original["progress_current"] == original["progress_total"] == 8
+    assert len(original["messages"]) == 8
+    assert "synthetic-sensitive-stage-detail" not in repr(original)
+    assert [command[3:5] for command in commands] == [
+        ("regenerate-draft-resumes", "JOB_IDS=job-a"),
+        ("regenerate-draft-resumes", "JOB_IDS=job-b"),
+        ("refine-draft-resumes", "JOB_IDS=job-a"),
+        ("refine-draft-resumes", "JOB_IDS=job-b"),
+        ("manual-pass-resumes", "JOB_IDS=job-b"),
+        ("highlight-draft-resumes", "JOB_IDS=job-b"),
+    ]
+
+    retry = client.post(f"/actions/{original_id}/retry")
+    assert retry.status_code == 202
+    retry_id = retry.get_json()["action_id"]
+    retried_commands = commands[6:]
+    assert [command[3:5] for command in retried_commands] == [
+        ("refine-draft-resumes", "JOB_IDS=job-a"),
+        ("manual-pass-resumes", "JOB_IDS=job-a"),
+        ("highlight-draft-resumes", "JOB_IDS=job-a"),
+    ]
+    assert not any("JOB_IDS=job-b" in command for command in retried_commands)
+    snapshots = client.get("/actions/status").get_json()["actions"]
+    retried = next(item for item in snapshots if item["id"] == retry_id)
+    assert retried["status"] == "completed"
+    assert retried["retry_of"] == original_id
+    assert retried["progress_current"] == retried["progress_total"] == 3
+    assert client.post(f"/actions/{retry_id}/dismiss").status_code == 200
+    assert all(
+        item["id"] != retry_id
+        for item in client.get("/actions/status").get_json()["actions"]
+    )
 
 
 def test_explicit_ats_recalculation_updates_selected_projection_and_skips_safely(
@@ -397,6 +532,64 @@ def test_explicit_ats_recalculation_updates_selected_projection_and_skips_safely
     assert store.get_application("no-jod-job") == skipped_before["no-jod-job"]
 
 
+def test_sync_selected_draft_flask_action_completes_bounded_operation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(webapp.threading, "Thread", _InlineThread)
+    app = webapp.create_app(_runtime(paths), project_root=ROOT)
+    store = app.extensions["career_agent_workbench"]["store"]
+    paths.output_dir.mkdir(parents=True)
+    store.seed_application(
+        ApplicationMetadata(
+            job_id="fictional-sync",
+            company="Example Systems",
+            job_title="Synthetic Engineer",
+            job_url="https://example.com/jobs/fictional-sync",
+            source="synthetic",
+        ),
+        source_text="Required: Python, Flask, testing, and observability.",
+        prompt_text="Responsibilities: Build synthetic Python services.",
+    )
+    resume = yaml.safe_load(
+        (ROOT / "examples/demo-workspace/profile/MASTER-RESUME.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    store.upsert_resume_variant(
+        "fictional-sync",
+        ResumeVariantWrite(
+            variant_key="v1",
+            variant_label="Synthetic selected draft",
+            source="synthetic",
+            application_resume_yaml=yaml.safe_dump(resume, sort_keys=False),
+            ats=AtsFields(score=1, missing_terms="stale"),
+        ),
+    )
+    before = store.select_resume_variant("fictional-sync", "v1")
+    before_revision = store.get_workflow_snapshot("fictional-sync").revision
+
+    response = app.test_client().post(
+        "/actions/run",
+        data={"target": "sync-draft-to-aro", "job_id": "fictional-sync"},
+    )
+    assert response.status_code == 202
+    action_id = response.get_json()["action_id"]
+    action = next(
+        item
+        for item in app.test_client().get("/actions/status").get_json()["actions"]
+        if item["id"] == action_id
+    )
+    assert action["status"] == "completed"
+    assert action["progress_current"] == action["progress_total"] == 1
+    after = store.get_application("fictional-sync")
+    assert after.selected_resume_variant == before.selected_resume_variant == "v1"
+    assert after.resume_variant_selection_mode == "manual"
+    assert after.ats.score is not None and after.ats.score != 1
+    assert store.get_workflow_snapshot("fictional-sync").revision != before_revision
+
+
 def test_registry_history_is_bounded_and_app_registries_stay_isolated(
     tmp_path: Path,
 ) -> None:
@@ -440,7 +633,14 @@ def test_packaged_ui_fetches_forms_polls_nonterminal_progress_and_refreshes(
     assert "fetch(form.action" in script_text
     assert 'fetch("/actions/status"' in script_text
     assert 'new Set(["completed", "failed"])' in script_text
+    assert 'terminalStates.add("partial")' in script_text
     assert "if (terminalStates.has(action.status))" in script_text
     assert "pollIntervalMilliseconds = 1500" in script_text
     assert "window.location.assign(refreshUrl" in script_text
     assert 'event.submitter?.hasAttribute("formaction")' in script_text
+    assert 'document.querySelector("#action-progress-bar")' in script_text
+    assert 'document.querySelector("#action-collapse")' in script_text
+    assert 'document.querySelector("#action-retry")' in script_text
+    assert 'document.querySelector("#action-dismiss")' in script_text
+    assert "renderPreferredAction()" in script_text
+    assert "action.current_job_id" in script_text

@@ -125,6 +125,7 @@ def run_manual_resume_pass(
         allow_skill_updates=True,
         job_description=job_description,
     )
+    _assert_manual_skill_inventory_unchanged(base_resume, candidate)
     html, pdf, diagnostics = _render_and_score(
         candidate,
         job_description,
@@ -172,6 +173,27 @@ def run_manual_resume_pass_for_job(**kwargs: Any) -> ManualPassResult:
     """Keyword-only compatibility spelling for the callable domain workflow."""
 
     return run_manual_resume_pass(**kwargs)
+
+
+def _assert_manual_skill_inventory_unchanged(
+    base_resume: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> None:
+    if _manual_skill_inventory(base_resume) != _manual_skill_inventory(candidate):
+        raise ResumeManualPassError("Manual resume workflow input is invalid.")
+
+
+def _manual_skill_inventory(resume: Mapping[str, Any]) -> Any:
+    skills = _clone_inert(resume.get("core_technical_skills"))
+    if type(skills) is not dict:
+        return skills
+    categories = skills.get("bullet_points")
+    if type(categories) is not list:
+        return skills
+    for category in categories:
+        if type(category) is dict:
+            category.pop("jod_matched_items", None)
+    return skills
 
 
 def _manual_context(*, v1: Any, v2: Any, evidence: Any) -> Mapping[str, Any]:

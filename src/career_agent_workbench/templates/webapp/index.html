@@ -16,14 +16,37 @@
       th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
       th { color: #566176; font-size: .8rem; }
       button { border: 0; border-radius: 8px; padding: .65rem .9rem; background: #174ea6; color: white; font-weight: 700; }
+      button.secondary { background: #5f6b7a; }
       button.danger { background: #a61b1b; }
       input, select, textarea { border: 1px solid #c6cedb; border-radius: 7px; padding: .5rem; }
       textarea { min-height: 3rem; resize: vertical; }
       .muted { color: #687386; }
       .status-list { display: grid; gap: .5rem; padding: 0; list-style: none; }
       .status-list li { padding: .7rem; border-radius: 8px; background: #f6f8fb; }
+      .progress-panel { display: grid; gap: .6rem; }
+      .progress-panel[hidden], .progress-details[hidden] { display: none; }
+      progress { width: 100%; }
+      .message-list, .failure-list { margin: 0; padding-left: 1.25rem; }
       .application-update { display: grid; gap: .35rem; min-width: 18rem; }
       .nowrap { white-space: nowrap; }
+      .status-row { border-left: 5px solid #94a3b8; }
+      .status-pending { border-left-color: #64748b; }
+      .status-applied { border-left-color: #2563eb; }
+      .status-interview { border-left-color: #15803d; background: #f4fbf6; }
+      .status-rejected { border-left-color: #b91c1c; background: #fff8f8; }
+      .status-not-applicable { border-left-color: #a16207; }
+      .status-pill, .variant-badge { display: inline-block; border-radius: 999px; padding: .12rem .45rem; font-size: .75rem; font-weight: 700; }
+      .status-pill { color: #fff; background: #475569; }
+      .status-interview .status-pill { background: #15803d; }
+      .status-rejected .status-pill { background: #b91c1c; }
+      .variant-badge { color: #475569; background: #e8edf5; border: 1px solid #cbd5e1; }
+      .variant-badge.available { color: #174ea6; background: #eef5ff; border-color: #93b4e8; }
+      .variant-badge.selected { color: #fff; background: #174ea6; border-color: #174ea6; }
+      .badge-list { display: flex; flex-wrap: wrap; gap: .25rem; margin: .25rem 0; }
+      .artifact-times { display: grid; gap: .1rem; margin: .3rem 0; font-size: .78rem; color: #687386; }
+      .bounded-value { display: -webkit-box; max-width: 28rem; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+      .bounded-value:focus { display: block; overflow: visible; }
+      .screen-reader-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
       @media (max-width: 900px) { table { display: block; overflow-x: auto; } }
     </style>
   </head>
@@ -87,15 +110,16 @@
             </tr>
           </thead>
           <tbody>
-            {% for application in applications %}
-              <tr>
+            {% for row in rows %}
+              {% set application = row.application %}
+              <tr class="status-row status-{{ row.status_key }}" data-application-status="{{ row.status_key }}">
                 <td><input form="bulk-actions-form" type="checkbox" name="job_id" value="{{ application.job_id }}" aria-label="Select {{ application.job_id }}"></td>
-                <td class="nowrap">{{ application.job_id }}</td>
+                <td><span class="bounded-value" tabindex="0">{{ application.job_id }}</span></td>
                 <td>
-                  <strong>{{ application.company }}</strong><br>
-                  <a href="{{ application.job_url }}" target="_blank" rel="noopener noreferrer">{{ application.job_title }}</a>
+                  <strong class="bounded-value" tabindex="0">{{ application.company }}</strong>
+                  <a class="bounded-value" href="{{ application.job_url }}" target="_blank" rel="noopener noreferrer">{{ application.job_title }}</a>
                 </td>
-                <td>{{ application.source or "—" }}</td>
+                <td><span class="bounded-value" tabindex="0">{{ application.source or "—" }}</span></td>
                 <td>
                   Matched: {{ application.date_matched or "—" }}<br>
                   Posted: {{ application.date_posted or "—" }}<br>
@@ -104,27 +128,40 @@
                   Experience: {{ application.experience_level or "—" }}
                 </td>
                 <td>
-                  {{ application.applied_to }}<br>
-                  <span class="muted">{{ application.notes or "No notes" }}</span>
+                  <span class="status-pill">{{ application.applied_to }}</span><br>
+                  <span class="screen-reader-only">Status for {{ application.job_id }}:</span>
+                  <span class="muted bounded-value" tabindex="0">{{ application.notes or "No notes" }}</span>
                 </td>
                 <td>
                   Selection: {{ application.selected_resume_variant or "none" }}
                   ({{ application.resume_variant_selection_mode }})<br>
+                  <div class="badge-list" aria-label="Resume variants">
+                    {% for variant_key in ("v1", "v2", "manual") %}
+                      <span class="variant-badge{% if variant_key in row.variant_keys %} available{% endif %}{% if variant_key == application.selected_resume_variant %} selected{% endif %}">{{ variant_key }}</span>
+                    {% endfor %}
+                  </div>
                   HTML: {{ "yes" if application.resume_html is not none else "no" }} ·
                   PDF: {{ "yes" if application.resume_pdf is not none else "no" }}<br>
                   ATS: {{ application.ats.score if application.ats.score is not none else "—" }}
                   {% if application.ats.formatting_risk %}({{ application.ats.formatting_risk }}){% endif %}<br>
+                  <div class="artifact-times" aria-label="Resume artifact timestamps">
+                    <span>Draft: {{ application.selected_variant.updated_at if application.selected_variant else "—" }}</span>
+                    <span>HTML: {{ application.resume_html_updated_at or "—" }}</span>
+                    <span>PDF: {{ application.resume_pdf_updated_at or "—" }}</span>
+                    <span>ATS: {{ application.ats.updated_at or "—" }}</span>
+                  </div>
                   <a href="/applications/{{ application.job_id }}/jod?{{ view.query_items|urlencode }}">JOD</a> ·
                   <a href="/resumes/{{ application.job_id }}/variants?{{ view.query_items|urlencode }}">Variants</a> ·
                   <a href="/resumes/{{ application.job_id }}/edit?{{ view.query_items|urlencode }}">Edit</a><br>
-                  <a href="/resume-html/{{ application.job_id }}">HTML</a> ·
-                  <a href="/resumes/{{ application.job_id }}">PDF</a> ·
+                  <a href="/resume-html/{{ application.job_id }}" target="_blank" rel="noopener noreferrer">HTML</a> ·
+                  <a href="/resumes/{{ application.job_id }}" target="_blank" rel="noopener noreferrer">PDF</a> ·
                   <a href="/resumes/{{ application.job_id }}/download">Download</a>
                 </td>
                 <td>
                   CLO: {{ "yes" if application.cover_letter is not none or application.cover_letter_pdf is not none else "no" }}<br>
+                  <span class="artifact-times">Updated: {{ application.cover_letter_updated_at or "—" }}</span>
                   <a href="/applications/{{ application.job_id }}/cover-letter?{{ view.query_items|urlencode }}">Edit</a> ·
-                  <a href="/cover-letters/{{ application.job_id }}">View</a> ·
+                  <a href="/cover-letters/{{ application.job_id }}" target="_blank" rel="noopener noreferrer">View</a> ·
                   <a href="/cover-letters/{{ application.job_id }}/download">Download</a><br>
                   Archived: {{ application.archived_at or "no" }}
                 </td>
@@ -178,8 +215,21 @@
       <section id="action-status">
         <h2>Action status</h2>
         <p id="web-feedback" class="muted" role="status">Ready.</p>
-        <p id="action-progress" class="muted"></p>
-        <ul class="status-list">
+        <div id="action-progress-panel" class="progress-panel" aria-live="polite" {% if not actions %}hidden{% endif %}>
+          <div class="actions">
+            <strong id="action-title">{{ actions[0].target if actions else "Action status" }}</strong>
+            <button id="action-collapse" class="secondary" type="button" aria-expanded="true">Collapse</button>
+            <button id="action-retry" class="secondary" type="button" hidden>Retry failed work</button>
+            <button id="action-dismiss" class="secondary" type="button" hidden>Dismiss</button>
+          </div>
+          <div id="action-progress-details" class="progress-details">
+            <p id="action-progress" class="muted"></p>
+            <progress id="action-progress-bar" max="1" value="0">0%</progress>
+            <ul id="action-failures" class="failure-list"></ul>
+            <ul id="action-messages" class="message-list"></ul>
+          </div>
+        </div>
+        <ul class="status-list" data-action-history>
           {% for action in actions %}
             <li><strong>{{ action.target }}</strong> — {{ action.status }} · {{ action.message }}</li>
           {% else %}

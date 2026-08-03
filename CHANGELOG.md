@@ -1,6 +1,38 @@
 # Changelog
 
-## [1.1.0] - In progress
+## [1.2.0] - In progress
+
+### Added
+
+- Initialized the digest-bound operational-parity workflow for the nine
+  approved v1.2.0 capability gaps; implementation remains separately gated.
+- Added bounded legacy/public Chromium comparisons and read-only gate evidence
+  routes for each approved parity slice.
+- Amended the v1.2.0 workflow evidence lifecycle to retain sealed external run
+  evidence only through its matching gate, use fresh clones from one immutable
+  digest-bound setup baseline, and delete content-bearing evidence promptly
+  after review or immediately when retention becomes unsafe.
+- Added a bounded pre-P03 manual-pass compatibility repair that freezes v2's
+  skill taxonomy and inventory, limits model edits to category-matched visible
+  items, prefers exact display skills over aliases, and keeps private Jenkins
+  mappings and deferred repair notes outside Git.
+- Bound P03/G03 to a separate immutable post-patch legacy snapshot while
+  preserving the accepted pre-patch G01/G02 evidence, preventing live archived
+  repository drift from rewriting completed gate history.
+- Restored dependent ingestion composition, bounded selected-draft sync,
+  survivor-aware progress and retry controls, and declared-parent variant
+  review with content-free evidence summaries.
+- Restored dense accessible tracker status, variant and timestamp cues, safe
+  artifact targets, and a lossless structured resume editor with revision,
+  selection, revert, sync, and advanced-YAML safeguards.
+- Added an accessible sanitized cover-letter rich editor and deterministic
+  one-page representative Letter rendering without weakening transactional
+  artifact or state-isolation behavior.
+- Completed the bounded manual-pass skills compatibility repair, explicit
+  wheel/sdist membership, full synthetic regression suite, offline Chromium
+  workbench, injected MCP stdio, and content-free full-ops compatibility gate.
+
+## [1.1.0] - 2026-08-02
 
 ### Added
 

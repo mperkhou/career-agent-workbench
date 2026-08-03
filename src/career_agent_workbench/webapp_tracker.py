@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 from career_agent_workbench.application_state import (
     APPLICATION_STATUSES,
+    VARIANT_KEYS,
     ApplicationRecord,
     ApplicationStateStore,
 )
@@ -28,6 +31,7 @@ TRACKER_SORTS = (
 TRACKER_DIRECTIONS = ("asc", "desc")
 TRACKER_STATUSES = ("all", *sorted(APPLICATION_STATUSES))
 _MAX_SEARCH_CHARS = 256
+_VARIANT_QUERY_CHUNK = 400
 
 
 class TrackerViewError(ValueError):
@@ -97,6 +101,64 @@ class TrackerView:
     @property
     def form_items(self) -> tuple[tuple[str, str], ...]:
         return tuple((f"view_{key}", value) for key, value in self.query_items)
+
+
+@dataclass(frozen=True, slots=True)
+class TrackerRow:
+    """Dense presentation metadata for one immutable application row."""
+
+    application: ApplicationRecord
+    variant_keys: tuple[str, ...]
+    status_key: str
+
+
+def tracker_rows(
+    database_path: Path,
+    applications: Sequence[ApplicationRecord],
+) -> tuple[TrackerRow, ...]:
+    """Attach bounded variant and status metadata without mutating state."""
+
+    if not applications:
+        return ()
+    identifiers = tuple(application.job_id for application in applications)
+    available = _variant_keys(database_path, identifiers)
+    return tuple(
+        TrackerRow(
+            application=application,
+            variant_keys=available[application.job_id],
+            status_key=_status_key(application.applied_to),
+        )
+        for application in applications
+    )
+
+
+def _variant_keys(
+    database_path: Path,
+    job_ids: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    selected: dict[str, set[str]] = {job_id: set() for job_id in job_ids}
+    try:
+        uri = f"{database_path.resolve(strict=True).as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            for start in range(0, len(job_ids), _VARIANT_QUERY_CHUNK):
+                chunk = tuple(job_ids[start : start + _VARIANT_QUERY_CHUNK])
+                placeholders = ", ".join("?" for _item in chunk)
+                rows = connection.execute(
+                    "SELECT job_id, variant_key FROM application_resume_variants "
+                    f"WHERE job_id IN ({placeholders})",
+                    chunk,
+                )
+                for job_id, variant_key in rows:
+                    if job_id not in selected or variant_key not in VARIANT_KEYS:
+                        raise ValueError
+                    selected[job_id].add(variant_key)
+    except Exception:  # noqa: BLE001 - state and path details remain private.
+        raise TrackerViewError("Tracker variant data is invalid.") from None
+    return {
+        job_id: tuple(key for key in VARIANT_KEYS if key in selected[job_id])
+        for job_id in job_ids
+    }
 
 
 def tracker_applications(
@@ -183,6 +245,16 @@ def _has_control(value: str) -> bool:
     )
 
 
+def _status_key(value: str) -> str:
+    return {
+        "No": "pending",
+        "Yes": "applied",
+        "N/A": "not-applicable",
+        "Rejected": "rejected",
+        "Accepted for interview": "interview",
+    }[value]
+
+
 __all__ = [
     "TRACKER_DIRECTIONS",
     "TRACKER_SCOPES",
@@ -190,6 +262,8 @@ __all__ = [
     "TRACKER_STATUSES",
     "TrackerView",
     "TrackerViewError",
+    "TrackerRow",
     "tracker_applications",
     "tracker_counts",
+    "tracker_rows",
 ]

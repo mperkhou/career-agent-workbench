@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
-
 from career_agent_workbench.application_state import (
     ApplicationStateStore,
     ApplicationWorkflowSnapshot,
@@ -19,7 +17,6 @@ from career_agent_workbench.application_state import (
 from career_agent_workbench.cli_paths import resolve_private_workspace_path
 from career_agent_workbench.config import WorkspacePaths
 
-_MAX_DIFF_LINES = 400
 _MAX_CHANGED_FIELDS = 64
 
 
@@ -102,15 +99,15 @@ def cover_letter_artifact(
 
 
 def variant_review(snapshot: ApplicationWorkflowSnapshot) -> tuple[dict[str, Any], ...]:
-    """Build bounded structured and YAML comparisons in canonical order."""
+    """Build bounded declared-parent comparisons without exposing raw values."""
 
     variants_by_key = {variant.variant_key: variant for variant in snapshot.variants}
     if len(variants_by_key) != len(snapshot.variants):
         raise WebArtifactError("Variant comparison is unavailable.")
     result: list[dict[str, Any]] = []
     for variant in snapshot.variants:
-        changed_fields: tuple[str, ...] = ()
-        unified_diff: tuple[str, ...] = ()
+        aro_comparison: dict[str, Any] | None = None
+        ats_comparison: dict[str, Any] | None = None
         parent: ResumeVariantRecord | None = None
         if variant.parent_variant_key is not None:
             parent = variants_by_key.get(variant.parent_variant_key)
@@ -119,25 +116,16 @@ def variant_review(snapshot: ApplicationWorkflowSnapshot) -> tuple[dict[str, Any
         if parent is not None:
             parent_mapping = _materialize(parent.application_resume)
             current_mapping = _materialize(variant.application_resume)
-            changed_fields = tuple(
-                sorted(
-                    key
-                    for key in {*parent_mapping, *current_mapping}
-                    if parent_mapping.get(key) != current_mapping.get(key)
-                )[:_MAX_CHANGED_FIELDS]
-            )
-            unified_diff = _yaml_diff(
-                parent.variant_key,
-                parent_mapping,
-                variant.variant_key,
-                current_mapping,
-            )
+            aro_comparison = _aro_comparison(parent_mapping, current_mapping)
+            ats_comparison = _ats_comparison(parent, variant)
         result.append(
             {
                 "variant": variant,
                 "parent": variant.parent_variant_key,
-                "changed_fields": changed_fields,
-                "unified_diff": unified_diff,
+                "aro_comparison": aro_comparison,
+                "ats_comparison": ats_comparison,
+                "evidence": _evidence_summary(variant),
+                "review_metadata": _review_metadata(variant),
             }
         )
     return tuple(result)
@@ -192,31 +180,136 @@ def copy_artifact_to_downloads(
         raise WebArtifactError("Artifact copy could not be completed.") from None
 
 
-def _yaml_diff(
-    old_name: str,
-    old_value: Mapping[str, Any],
-    new_name: str,
-    new_value: Mapping[str, Any],
-) -> tuple[str, ...]:
-    import difflib
-
-    old_lines = yaml.safe_dump(
-        old_value, sort_keys=False, allow_unicode=False
-    ).splitlines()
-    new_lines = yaml.safe_dump(
-        new_value, sort_keys=False, allow_unicode=False
-    ).splitlines()
-    return tuple(
-        list(
-            difflib.unified_diff(
-                old_lines,
-                new_lines,
-                fromfile=old_name,
-                tofile=new_name,
-                lineterm="",
-            )
-        )[:_MAX_DIFF_LINES]
+def _aro_comparison(
+    parent: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    parent_keys = set(parent)
+    current_keys = set(current)
+    added = tuple(sorted(current_keys - parent_keys))
+    removed = tuple(sorted(parent_keys - current_keys))
+    changed = tuple(
+        sorted(key for key in parent_keys & current_keys if parent[key] != current[key])
     )
+    return {
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "changed_count": len(changed),
+        "added_fields": added[:_MAX_CHANGED_FIELDS],
+        "removed_fields": removed[:_MAX_CHANGED_FIELDS],
+        "changed_fields": changed[:_MAX_CHANGED_FIELDS],
+        "truncated": any(
+            len(values) > _MAX_CHANGED_FIELDS for values in (added, removed, changed)
+        ),
+    }
+
+
+def _ats_comparison(
+    parent: ResumeVariantRecord,
+    current: ResumeVariantRecord,
+) -> dict[str, Any]:
+    metrics: dict[str, dict[str, int | None]] = {}
+    for label, attribute in (
+        ("overall", "score"),
+        ("parsing", "parsing_score"),
+        ("keywords", "keyword_score"),
+        ("semantic", "semantic_score"),
+    ):
+        before = getattr(parent.ats, attribute)
+        after = getattr(current.ats, attribute)
+        metrics[label] = {
+            "parent": before,
+            "current": after,
+            "delta": after - before
+            if before is not None and after is not None
+            else None,
+        }
+    return {
+        "metrics": metrics,
+        "formatting_risk_changed": (
+            parent.ats.formatting_risk != current.ats.formatting_risk
+        ),
+        "parent_missing_term_count": _term_count(parent.ats.missing_terms),
+        "current_missing_term_count": _term_count(current.ats.missing_terms),
+    }
+
+
+def _term_count(value: str | None) -> int | None:
+    if value is None:
+        return None
+    return len(tuple(item for item in value.split(",") if item.strip()))
+
+
+def _evidence_summary(variant: ResumeVariantRecord) -> dict[str, Any]:
+    validation = variant.validation if isinstance(variant.validation, Mapping) else None
+    critique = variant.critique if isinstance(variant.critique, Mapping) else None
+    accepted = _first_sequence(
+        critique,
+        validation,
+        key="accepted_change_ids",
+    )
+    rejected = _first_sequence(
+        critique,
+        validation,
+        key="rejected_changes",
+    )
+    return {
+        "evidence_packet": "recorded"
+        if variant.evidence_packet is not None
+        else "not recorded",
+        "external_critique": (
+            "recorded" if variant.external_critique is not None else "not recorded"
+        ),
+        "critique": "recorded" if variant.critique is not None else "not recorded",
+        "validation": "recorded" if validation is not None else "not recorded",
+        "accepted_count": None if accepted is None else len(accepted),
+        "rejected_count": None if rejected is None else len(rejected),
+    }
+
+
+def _first_sequence(
+    *values: Mapping[str, Any] | None,
+    key: str,
+) -> list[Any] | tuple[Any, ...] | None:
+    for value in values:
+        if value is None:
+            continue
+        candidate = value.get(key)
+        if type(candidate) in {list, tuple}:
+            return candidate
+    return None
+
+
+def _review_metadata(variant: ResumeVariantRecord) -> dict[str, Any]:
+    validation = variant.validation if isinstance(variant.validation, Mapping) else None
+    outcome = None
+    if validation is not None:
+        candidate = validation.get("is_valid", validation.get("valid"))
+        if type(candidate) is bool:
+            outcome = candidate
+    state = None
+    metadata = variant.model_metadata
+    if isinstance(metadata, Mapping) and "review_state" in metadata:
+        candidate = metadata.get("review_state")
+        if type(candidate) is str and candidate in {
+            "awaiting_user_review",
+            "accepted",
+            "rejected",
+            "reviewed",
+            "draft",
+        }:
+            state = candidate
+        else:
+            state = "recorded"
+    return {
+        "created_at": variant.created_at,
+        "updated_at": variant.updated_at,
+        "html_updated_at": variant.resume_html_updated_at,
+        "pdf_updated_at": variant.resume_pdf_updated_at,
+        "ats_updated_at": variant.ats.updated_at,
+        "validation_outcome": outcome,
+        "review_state": state or "not recorded",
+    }
 
 
 def _materialize(value: Any) -> Any:

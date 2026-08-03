@@ -801,6 +801,29 @@ def test_skill_rows_keep_primary_alias_order_deduplication_and_eight_matches() -
     assert "Additional 10" not in rows[0]["text"]
 
 
+def test_skill_rows_prefer_exact_display_skill_over_colliding_alias() -> None:
+    value = {
+        "bullet_points": [
+            {
+                "category": "Synthetic Tools",
+                "items": {
+                    "primary": [],
+                    "additional": ["Exact Display Tool", "Other Display Tool"],
+                    "match_terms": {
+                        "Other Display Tool": ["Exact Display Tool"],
+                        "Exact Display Tool": ["display alias"],
+                    },
+                },
+                "jod_matched_items": ["Exact Display Tool", "display alias"],
+            }
+        ]
+    }
+
+    assert render_core_skill_rows(value) == [
+        {"category": "Synthetic Tools", "text": "Exact Display Tool"}
+    ]
+
+
 def test_exact_yaml_and_exact_template_override_are_honored(tmp_path: Path) -> None:
     yaml_path = tmp_path / "resume-input.yml"
     yaml_path.write_text(yaml.safe_dump(_fictional_resume()), encoding="utf-8")

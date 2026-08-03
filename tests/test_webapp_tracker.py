@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from career_agent_workbench import webapp
 from career_agent_workbench.application_state import (
@@ -15,6 +16,7 @@ from career_agent_workbench.webapp_tracker import (
     TRACKER_SORTS,
     TrackerView,
     tracker_applications,
+    tracker_rows,
 )
 
 
@@ -174,6 +176,98 @@ def test_tracker_filters_searches_sorts_and_rebuilds_local_view(tmp_path: Path) 
         {"q": "bad\nquery"},
     ):
         assert client.get("/", query_string=query).status_code == 400
+
+
+def test_tracker_rows_expose_dense_status_badges_timestamps_and_safe_targets(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    store = app.extensions["career_agent_workbench"]["store"]
+    _seed(
+        app,
+        "dense-job",
+        company="Example Systems " + "X" * 200,
+        title="Synthetic Engineer " + "Y" * 200,
+    )
+    store.upsert_resume_variant(
+        "dense-job",
+        ResumeVariantWrite(
+            variant_key="v1",
+            variant_label="Draft v1",
+            source="synthetic",
+            application_resume_yaml="name: Fictional\n",
+            resume_html="<p>Fictional</p>",
+            resume_pdf=b"pdf-v1",
+            ats=AtsFields(score=70, updated_at="2026-08-02T12:00:00+00:00"),
+        ),
+    )
+    store.upsert_resume_variant(
+        "dense-job",
+        ResumeVariantWrite(
+            variant_key="manual",
+            variant_label="Manual draft",
+            source="synthetic",
+            parent_variant_key="v1",
+            application_resume_yaml="name: Fictional Manual\n",
+            resume_html="<p>Fictional manual</p>",
+            resume_pdf=b"pdf-manual",
+            ats=AtsFields(score=82, updated_at="2026-08-02T13:00:00+00:00"),
+        ),
+    )
+    store.store_clo(
+        "dense-job",
+        value={"body_html": "<p>Synthetic letter</p>"},
+        pdf_content=b"pdf-clo",
+    )
+    store.update_application_status(
+        "dense-job",
+        applied_to="Accepted for interview",
+        notes="bounded " + "note " * 100,
+    )
+
+    before = store.get_workflow_snapshot("dense-job")
+    response = app.test_client().get("/")
+    assert response.status_code == 200
+    assert store.get_workflow_snapshot("dense-job") == before
+    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+    row = soup.select_one('tr[data-application-status="interview"]')
+    assert row is not None
+    assert "status-interview" in row.get("class", [])
+    badges = {
+        badge.get_text(strip=True): badge for badge in row.select(".variant-badge")
+    }
+    assert set(badges) == {"v1", "v2", "manual"}
+    assert "available" in badges["v1"].get("class", [])
+    assert "selected" in badges["manual"].get("class", [])
+    assert "available" not in badges["v2"].get("class", [])
+    assert "2026-08-02T13:00:00+00:00" in row.get_text(" ", strip=True)
+    assert len(row.select(".bounded-value")) >= 4
+
+    expected_targets = (
+        "/resume-html/dense-job",
+        "/resumes/dense-job",
+        "/cover-letters/dense-job",
+    )
+    for href in expected_targets:
+        link = row.find("a", href=href)
+        assert link is not None
+        assert link.get("target") == "_blank"
+        assert set(link.get("rel", [])) == {"noopener", "noreferrer"}
+    for href in (
+        "/resumes/dense-job/download",
+        "/cover-letters/dense-job/download",
+    ):
+        assert row.find("a", href=href).get("target") is None
+    edit_link = row.find("a", href=lambda value: bool(value and "/edit?" in value))
+    assert edit_link is not None
+    assert edit_link.get("target") is None
+
+    rows = tracker_rows(
+        _paths(tmp_path).database,
+        tracker_applications(store, TrackerView()),
+    )
+    assert rows[0].status_key == "interview"
+    assert rows[0].variant_keys == ("v1", "manual")
 
 
 def test_gets_are_read_only_and_lifecycle_mutations_preserve_resume_state(

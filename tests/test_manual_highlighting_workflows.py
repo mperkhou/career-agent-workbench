@@ -277,7 +277,15 @@ def _resume(bullet: str) -> dict[str, Any]:
                         "additional": ["Python"],
                         "match_terms": {"DevOps": ["automation"]},
                     },
-                }
+                },
+                {
+                    "category": "Synthetic Data Systems",
+                    "items": {
+                        "primary": ["SQL"],
+                        "additional": ["Example Warehouse"],
+                        "match_terms": {"Example Warehouse": ["warehouse alias"]},
+                    },
+                },
             ]
         },
         "professional_experience": {
@@ -455,36 +463,25 @@ def _patch_response(*, current: str, proposed: str) -> str:
     )
 
 
-def _skill_patch_response(*, proposed_primary: list[str]) -> str:
-    current = json.dumps(
-        {
-            "primary": list(SAFEGUARDED_SKILLS),
-            "additional": ["Python"],
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    proposed = json.dumps(
-        {"primary": proposed_primary, "additional": []},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+def _skill_patch_response(*, proposed_matches: list[str]) -> str:
+    current = json.dumps([], separators=(",", ":"))
+    proposed = json.dumps(proposed_matches, separators=(",", ":"))
     return json.dumps(
         {
             "schema_version": RESUME_PATCH_SCHEMA_VERSION,
             "changes": [
                 {
                     "change_id": "manual-skill-change-1",
-                    "operation": "replace_skill_items",
+                    "operation": "replace_skill_matches",
                     "target": {
                         "section": "core_technical_skills",
-                        "field": "items",
+                        "field": "jod_matched_items",
                         "job_order": "1",
                         "bullet_order": None,
                     },
                     "current_text": current,
                     "proposed_text": proposed,
-                    "rationale": "Prune duplicate skill wording without bloat.",
+                    "rationale": "Select an inventoried same-category match.",
                     "evidence_refs": ["mro:job:1:bullet:1"],
                 }
             ],
@@ -560,9 +557,7 @@ def test_manual_skill_policy_reaches_request_and_preserves_supported_terms(
     store.select_resume_variant(JOB_ID, "v2")
     before_v1 = store.get_resume_variant(JOB_ID, "v1")
     before_v2 = store.get_resume_variant(JOB_ID, "v2")
-    runner = _FakeRunner(
-        _skill_patch_response(proposed_primary=list(SAFEGUARDED_SKILLS))
-    )
+    runner = _FakeRunner(_skill_patch_response(proposed_matches=["Python"]))
 
     result = run_manual_resume_pass(
         store=store,
@@ -575,17 +570,31 @@ def test_manual_skill_policy_reaches_request_and_preserves_supported_terms(
     assert len(runner.requests) == 1
     prompt = runner.requests[0].prompt
     assert all(term in prompt for term in SAFEGUARDED_SKILLS)
-    assert "Keep pruning and de-duplicating the skills section" in prompt
-    assert "do not copy v2's skills section wholesale" in prompt
-    assert "never retain an unsupported claim merely to retain a term" in prompt
+    assert "change only the existing category's jod_matched_items list" in prompt
+    assert "category order, category names, primary and additional" in prompt
+    assert "match_terms aliases" in prompt
+    assert "operation replace_skill_matches" in prompt
+    assert "Keep pruning and de-duplicating" not in prompt
+    assert "replace only the rendered primary/additional" not in prompt
     assert "canonical_mro_skill_evidence" in prompt
     manual = store.get_resume_variant(JOB_ID, "manual")
-    manual_items = manual.application_resume["core_technical_skills"]["bullet_points"][
-        0
-    ]["items"]
+    before_categories = before_v2.application_resume["core_technical_skills"][
+        "bullet_points"
+    ]
+    manual_categories = manual.application_resume["core_technical_skills"][
+        "bullet_points"
+    ]
+    manual_items = manual_categories[0]["items"]
     assert manual_items["primary"] == SAFEGUARDED_SKILLS
-    assert manual_items["additional"] == ()
+    assert manual_items["additional"] == ("Python",)
     assert manual_items["match_terms"]["DevOps"] == ("automation",)
+    assert manual_categories[0]["jod_matched_items"] == ("Python",)
+    assert [category["category"] for category in manual_categories] == [
+        category["category"] for category in before_categories
+    ]
+    assert [category["items"] for category in manual_categories] == [
+        category["items"] for category in before_categories
+    ]
     assert manual.parent_variant_key == "v2"
     assert result.changed_count == 1
     assert store.get_application(JOB_ID).selected_resume_variant == "v2"
@@ -594,7 +603,7 @@ def test_manual_skill_policy_reaches_request_and_preserves_supported_terms(
     assert store.get_resume_variant(JOB_ID, "v2") == before_v2
 
 
-def test_manual_skill_policy_rejects_unsupported_surrounding_claim(
+def test_manual_skill_policy_rejects_match_from_another_category(
     tmp_path: Path,
     fake_rendering: None,
 ) -> None:
@@ -602,17 +611,14 @@ def test_manual_skill_policy_rejects_unsupported_surrounding_claim(
     store = _store_with_v1_v2(paths)
     before_v1 = store.get_resume_variant(JOB_ID, "v1")
     before_v2 = store.get_resume_variant(JOB_ID, "v2")
-    inflated = [
-        *SAFEGUARDED_SKILLS[:-1],
-        "Led enterprise-wide GitHub Actions transformation",
-    ]
-
     with pytest.raises(ResumePatchError):
         run_manual_resume_pass(
             store=store,
             paths=paths,
             job_id=JOB_ID,
-            runner=_FakeRunner(_skill_patch_response(proposed_primary=inflated)),
+            runner=_FakeRunner(
+                _skill_patch_response(proposed_matches=["warehouse alias"])
+            ),
             model_config=_config("manual_pass"),
         )
 
@@ -622,31 +628,29 @@ def test_manual_skill_policy_rejects_unsupported_surrounding_claim(
     assert store.get_resume_variant(JOB_ID, "v2") == before_v2
 
 
-def test_manual_skill_policy_has_no_hard_five_term_validator(
+def test_manual_skill_policy_accepts_bounded_same_category_matches(
     tmp_path: Path,
     fake_rendering: None,
 ) -> None:
     paths = _paths(tmp_path)
     store = _store_with_v1_v2(paths)
-    supported_pruned = [term for term in SAFEGUARDED_SKILLS if term != "Scalability"]
+    proposed = [*SAFEGUARDED_SKILLS, "Python"]
 
     result = run_manual_resume_pass(
         store=store,
         paths=paths,
         job_id=JOB_ID,
-        runner=_FakeRunner(_skill_patch_response(proposed_primary=supported_pruned)),
+        runner=_FakeRunner(_skill_patch_response(proposed_matches=proposed)),
         model_config=_config("manual_pass"),
         dry_run=True,
     )
 
     assert result.changed_count == 1
     assert result.stored_variant is None
-    assert (
-        "Scalability"
-        not in result.candidate["core_technical_skills"]["bullet_points"][0]["items"][
-            "primary"
-        ]
-    )
+    category = result.candidate["core_technical_skills"]["bullet_points"][0]
+    assert category["items"]["primary"] == SAFEGUARDED_SKILLS
+    assert category["items"]["additional"] == ("Python",)
+    assert category["jod_matched_items"] == tuple(proposed)
 
 
 def test_manual_pass_inherits_exact_for_adjunct_fronting_validator(

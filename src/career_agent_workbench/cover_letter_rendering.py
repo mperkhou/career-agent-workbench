@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen.canvas import Canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate
 
 MAX_COVER_LETTER_HTML_CHARS = 500_000
 MAX_COVER_LETTER_PDF_BYTES = 20_000_000
@@ -20,6 +20,10 @@ _ALLOWED_TAGS = frozenset({"p", "div", "br", "strong", "b", "em", "i", "a"})
 _BLOCK_TAGS = frozenset({"p", "div"})
 _REMOVED_WITH_CONTENT = frozenset({"script", "style", "iframe", "object", "embed"})
 _SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
+_PAGE_MARGIN = 54
+_BODY_FONT_SIZE = 10
+_BODY_LEADING = 13
+_PARAGRAPH_SPACE_AFTER = 6
 
 
 class CoverLetterRenderingError(ValueError):
@@ -158,17 +162,18 @@ def _render_pdf(sanitized_html: str, plain_text: str) -> bytes:
     document = SimpleDocTemplate(
         output,
         pagesize=LETTER,
-        rightMargin=72,
-        leftMargin=72,
-        topMargin=72,
-        bottomMargin=72,
+        rightMargin=_PAGE_MARGIN,
+        leftMargin=_PAGE_MARGIN,
+        topMargin=_PAGE_MARGIN,
+        bottomMargin=_PAGE_MARGIN,
         title="Cover Letter",
         author="Career Agent Workbench",
     )
     style = getSampleStyleSheet()["BodyText"]
     style.fontName = "Helvetica"
-    style.fontSize = 11
-    style.leading = 16
+    style.fontSize = _BODY_FONT_SIZE
+    style.leading = _BODY_LEADING
+    style.spaceAfter = _PARAGRAPH_SPACE_AFTER
     story: list[Any] = []
     soup = BeautifulSoup(sanitized_html, "html.parser")
     inline_nodes: list[Any] = []
@@ -177,20 +182,20 @@ def _render_pdf(sanitized_html: str, plain_text: str) -> bytes:
         markup = "".join(_reportlab_markup(node) for node in inline_nodes).strip()
         inline_nodes.clear()
         if markup:
-            story.extend((Paragraph(markup, style), Spacer(1, 9)))
+            story.append(Paragraph(markup, style))
 
     for node in soup.children:
         if isinstance(node, Tag) and node.name.casefold() in _BLOCK_TAGS:
             flush_inline_nodes()
             markup = _reportlab_markup(node).strip()
             if markup:
-                story.extend((Paragraph(markup, style), Spacer(1, 9)))
+                story.append(Paragraph(markup, style))
         else:
             inline_nodes.append(node)
     flush_inline_nodes()
     if not story:
         for line in plain_text.splitlines() or ("",):
-            story.extend((Paragraph(html.escape(line), style), Spacer(1, 9)))
+            story.append(Paragraph(html.escape(line), style))
 
     def invariant_canvas(*args, **kwargs):
         kwargs["invariant"] = 1

@@ -5,6 +5,15 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
+
+from career_agent_workbench.application_state import (
+    ApplicationMetadata,
+    ApplicationStateStore,
+    AtsFields,
+    ResumeVariantWrite,
+)
+from career_agent_workbench.config import WorkspacePaths
 
 ROOT = Path(__file__).resolve().parents[1]
 STATEFUL_TARGETS = (
@@ -250,6 +259,69 @@ def test_batch_make_explicit_ids_emit_one_flag_per_token(target: str) -> None:
     tokens = shlex.split(_dry_run(target, "JOB_IDS=fictional-a fictional-b"))
     assert tokens.count("--job-id") == 2
     assert "fictional-a" in tokens and "fictional-b" in tokens
+
+
+def test_sync_draft_make_target_completes_bounded_selected_operation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    paths = WorkspacePaths(
+        root=workspace,
+        database=workspace / "state" / "applications.sqlite3",
+        output_dir=workspace / "output",
+    )
+    store = ApplicationStateStore(paths)
+    store.initialize()
+    paths.output_dir.mkdir(parents=True)
+    store.seed_application(
+        ApplicationMetadata(
+            job_id="fictional-sync",
+            company="Example Systems",
+            job_title="Synthetic Engineer",
+            job_url="https://example.com/jobs/fictional-sync",
+            source="synthetic",
+        ),
+        source_text="Required: Python, Flask, testing, and observability.",
+        prompt_text="Responsibilities: Build synthetic Python services.",
+    )
+    resume = yaml.safe_load(
+        (ROOT / "examples/demo-workspace/profile/MASTER-RESUME.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    store.upsert_resume_variant(
+        "fictional-sync",
+        ResumeVariantWrite(
+            variant_key="v1",
+            variant_label="Synthetic selected draft",
+            source="synthetic",
+            application_resume_yaml=yaml.safe_dump(resume, sort_keys=False),
+            ats=AtsFields(score=1, missing_terms="stale"),
+        ),
+    )
+    selected = store.select_resume_variant("fictional-sync", "v1")
+    assert selected.resume_variant_selection_mode == "manual"
+
+    completed = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "sync-draft-to-aro",
+            f"DATABASE={paths.database}",
+            f"OUTPUT_DIR={paths.output_dir}",
+            "JOB_IDS=fictional-sync",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert '{"processed": 1}' in completed.stdout
+    after = store.get_application("fictional-sync")
+    assert after.selected_resume_variant == "v1"
+    assert after.resume_variant_selection_mode == "manual"
+    assert after.ats.score is not None and after.ats.score != 1
 
 
 @pytest.mark.parametrize("selection", [None, "", "all"])

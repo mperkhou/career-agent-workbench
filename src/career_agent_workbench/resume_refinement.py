@@ -286,7 +286,7 @@ class ResumePatchTarget:
         "professional_experience",
         "core_technical_skills",
     ]
-    field: Literal["paragraph", "text", "items"]
+    field: Literal["paragraph", "text", "jod_matched_items"]
     job_order: str | None
     bullet_order: str | None
 
@@ -295,7 +295,7 @@ class ResumePatchTarget:
         if self.section == "professional_summary":
             return f"summary:{self.field}"
         if self.section == "core_technical_skills":
-            return f"skills:{self.job_order}:items"
+            return f"skills:{self.job_order}:jod-matched-items"
         return f"experience:{self.job_order}:bullet:{self.bullet_order}"
 
 
@@ -307,7 +307,7 @@ class ResumePatch:
     operation: Literal[
         "rewrite_summary",
         "rewrite_bullet",
-        "replace_skill_items",
+        "replace_skill_matches",
     ]
     target: ResumePatchTarget
     current_text: str = field(repr=False)
@@ -644,12 +644,16 @@ def _collect_skill_patch_targets(
         ):
             raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
         _validate_text(category_name, max_chars=1_024)
-        visible = _visible_skill_items(items)
-        if not visible:
+        inventory = _visible_skill_items(items)
+        if not any(inventory.values()):
             continue
+        current_matches = _skill_match_values(
+            category.get("jod_matched_items", []),
+            require_unique=False,
+        )
         target = ResumePatchTarget(
             section="core_technical_skills",
-            field="items",
+            field="jod_matched_items",
             job_order=str(category_index + 1),
             bullet_order=None,
         )
@@ -659,7 +663,7 @@ def _collect_skill_patch_targets(
         targets.append(
             _ResumeTarget(
                 target=target,
-                text=_serialize_skill_items(visible),
+                text=_serialize_skill_matches(current_matches),
                 role_id="mro:skills",
                 employer="Canonical MRO",
                 role=category_name,
@@ -667,7 +671,7 @@ def _collect_skill_patch_targets(
                     "core_technical_skills",
                     "bullet_points",
                     category_index,
-                    "items",
+                    "jod_matched_items",
                 ),
             )
         )
@@ -696,11 +700,10 @@ def _visible_skill_items(items: dict[str, Any]) -> dict[str, list[str]]:
     return visible
 
 
-def _serialize_skill_items(items: Mapping[str, list[str]]) -> str:
+def _serialize_skill_matches(items: tuple[str, ...]) -> str:
     return json.dumps(
-        dict(items),
+        list(items),
         ensure_ascii=True,
-        sort_keys=True,
         separators=(",", ":"),
     )
 
@@ -762,18 +765,14 @@ def build_resume_patch_prompt(
         else None,
     }
     manual_skill_policy = (
-        " For manual skill targets, replace only the rendered primary/additional "
-        "item lists represented by the exact current_text JSON object; preserve "
-        "category identity and non-rendered metadata. Keep pruning and "
-        "de-duplicating the skills section to avoid bloat; do not copy v2's skills "
-        "section wholesale. While pruning, preserve or include DevOps, Scalability, "
-        "CI/CD pipelines, cloud environments, and GitHub Actions when the term is "
-        "already present in v2 or requested by the JOD and supported by MRO/ARO "
-        "evidence. Rewrite inflated surrounding wording truthfully while retaining "
-        "only supported terms; never retain an unsupported claim merely to retain a "
-        "term. Use operation replace_skill_items, section core_technical_skills, "
-        "field items, the supplied job_order, null bullet_order, and JSON-encoded "
-        "current_text/proposed_text objects with the same list keys."
+        " For manual skill targets, change only the existing category's "
+        "jod_matched_items list. The v2 category order, category names, primary and "
+        "additional inventories, match_terms aliases, and all other skill metadata "
+        "are immutable. Every proposed visible match must be an exact display skill "
+        "or a match_terms alias that resolves within that same category. Use "
+        "operation replace_skill_matches, section core_technical_skills, field "
+        "jod_matched_items, the supplied job_order, null bullet_order, and "
+        "JSON-encoded current_text/proposed_text lists."
         if workflow == "manual"
         else ""
     )
@@ -1063,7 +1062,7 @@ def parse_resume_patch_response(response_text: str) -> ResumePatchResponse:
         if type(operation) is not str or operation not in {
             "rewrite_summary",
             "rewrite_bullet",
-            "replace_skill_items",
+            "replace_skill_matches",
         }:
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
         target = _parse_patch_target(raw["target"])
@@ -1078,7 +1077,7 @@ def parse_resume_patch_response(response_text: str) -> ResumePatchResponse:
         ):
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
         if (
-            operation == "replace_skill_items"
+            operation == "replace_skill_matches"
             and target.section != "core_technical_skills"
         ):
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
@@ -1179,19 +1178,15 @@ def validate_and_apply_resume_patches(
         if target.target.section == "core_technical_skills":
             if not allow_skill_updates or job_description is None:
                 raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-            current_items = _parse_skill_items(
+            _parse_skill_matches(
                 change.current_text,
                 require_unique=False,
             )
-            proposed_items = _parse_skill_items(
-                change.proposed_text,
-                expected_keys=frozenset(current_items),
-            )
-            if not _skill_items_are_supported(
-                current_items=current_items,
-                proposed_items=proposed_items,
-                job_description=job_description,
-                master_resume=validated_evidence.master_resume,
+            proposed_matches = _parse_skill_matches(change.proposed_text)
+            category = _value_at_location(candidate, target.location[:-1])
+            if (
+                type(category) is not dict
+                or _resolve_skill_matches(category, proposed_matches) is None
             ):
                 raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
         else:
@@ -1216,15 +1211,16 @@ def validate_and_apply_resume_patches(
     for change in response.changes:
         target = target_by_id[change.target.target_id]
         if target.target.section == "core_technical_skills":
-            existing = _value_at_location(candidate, target.location)
-            if type(existing) is not dict:
+            category = _value_at_location(candidate, target.location[:-1])
+            if type(category) is not dict:
                 raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-            updated = _clone_inert(existing)
-            if type(updated) is not dict:
+            resolved = _resolve_skill_matches(
+                category,
+                _parse_skill_matches(change.proposed_text),
+            )
+            if resolved is None:
                 raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-            for key, values in _parse_skill_items(change.proposed_text).items():
-                updated[key] = list(values)
-            _set_exact_location(candidate, target.location, updated)
+            _set_exact_location(candidate, target.location, list(resolved))
         else:
             _set_exact_location(candidate, target.location, change.proposed_text)
 
@@ -1786,7 +1782,7 @@ def _validate_patch_response_object(value: object) -> None:
             not _IDENTIFIER_RE.fullmatch(change.change_id)
             or change.change_id in change_ids
             or change.operation
-            not in {"rewrite_summary", "rewrite_bullet", "replace_skill_items"}
+            not in {"rewrite_summary", "rewrite_bullet", "replace_skill_matches"}
             or not change.current_text
             or len(change.current_text) > MAX_PATCH_TEXT_CHARS
             or not change.proposed_text
@@ -1831,8 +1827,8 @@ def _validate_patch_response_object(value: object) -> None:
             )
         elif target.section == "core_technical_skills":
             target_valid = (
-                change.operation == "replace_skill_items"
-                and target.field == "items"
+                change.operation == "replace_skill_matches"
+                and target.field == "jod_matched_items"
                 and type(target.job_order) is str
                 and 0 < len(target.job_order) <= 128
                 and target.bullet_order is None
@@ -2119,7 +2115,7 @@ def _parse_patch_target(value: object) -> ResumePatchTarget:
             bullet_order=bullet_order,
         )
     if section == "core_technical_skills":
-        if field_name != "items" or value["bullet_order"] is not None:
+        if field_name != "jod_matched_items" or value["bullet_order"] is not None:
             raise ResumePatchError(_WORKFLOW_MODEL_ERROR)
         job_order = _bounded_plain_string(
             value["job_order"],
@@ -2128,7 +2124,7 @@ def _parse_patch_target(value: object) -> ResumePatchTarget:
         )
         return ResumePatchTarget(
             section="core_technical_skills",
-            field="items",
+            field="jod_matched_items",
             job_order=job_order,
             bullet_order=None,
         )
@@ -2170,7 +2166,7 @@ def _validated_prompt_target_id(target: ResumePatchTarget) -> str:
         )
     elif target.section == "core_technical_skills":
         valid = (
-            target.field == "items"
+            target.field == "jod_matched_items"
             and type(target.job_order) is str
             and 0 < len(target.job_order) <= 128
             and target.bullet_order is None
@@ -2468,90 +2464,86 @@ def _value_at_location(
     return current
 
 
-def _parse_skill_items(
+def _parse_skill_matches(
     value: str,
     *,
-    expected_keys: frozenset[str] | None = None,
     require_unique: bool = True,
-) -> dict[str, tuple[str, ...]]:
-    loaded = _strict_json_object(value)
-    if (
-        type(loaded) is not dict
-        or not loaded
-        or not set(loaded).issubset({"primary", "additional"})
-        or expected_keys is not None
-        and set(loaded) != expected_keys
-    ):
-        raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-    parsed: dict[str, tuple[str, ...]] = {}
-    seen: set[str] = set()
-    for key in ("primary", "additional"):
-        if key not in loaded:
-            continue
-        values = loaded[key]
-        if type(values) is not list or len(values) > MAX_JSON_COLLECTION_ITEMS:
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-        items: list[str] = []
-        for item in values:
-            parsed_item = _bounded_plain_string(
-                item,
-                max_chars=1_024,
-                allow_empty=False,
-            )
-            normalized = _claim_text(parsed_item)
-            if require_unique and normalized in seen:
-                raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-            seen.add(normalized)
-            items.append(parsed_item)
-        parsed[key] = tuple(items)
-    return parsed
+) -> tuple[str, ...]:
+    try:
+        loaded = json.loads(value)
+    except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+        raise ResumePatchError(_WORKFLOW_PATCH_ERROR) from None
+    return _skill_match_values(loaded, require_unique=require_unique)
 
 
-def _skill_items_are_supported(
+def _skill_match_values(
+    value: object,
     *,
-    current_items: Mapping[str, tuple[str, ...]],
-    proposed_items: Mapping[str, tuple[str, ...]],
-    job_description: str,
-    master_resume: Mapping[str, Any],
-) -> bool:
-    current_evidence = tuple(
-        item for values in current_items.values() for item in values
-    )
-    canonical_evidence = tuple(_iter_resume_strings(master_resume))
-    normalized_job = _claim_text(job_description)
-    for proposed in (item for values in proposed_items.values() for item in values):
-        normalized = _claim_text(proposed)
-        eligible = any(
-            _contains_phrase(_claim_text(existing), normalized)
-            for existing in current_evidence
-        ) or _contains_phrase(normalized_job, normalized)
-        supported = any(
-            _contains_phrase(_claim_text(evidence), normalized)
-            for evidence in (*current_evidence, *canonical_evidence)
+    require_unique: bool,
+) -> tuple[str, ...]:
+    if type(value) is not list or len(value) > MAX_JSON_COLLECTION_ITEMS:
+        raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for item in value:
+        parsed_item = _bounded_plain_string(
+            item,
+            max_chars=1_024,
+            allow_empty=False,
         )
-        if not eligible or not supported:
-            return False
-    return True
+        normalized = _claim_text(parsed_item)
+        if require_unique and normalized in seen:
+            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
+        seen.add(normalized)
+        parsed.append(parsed_item)
+    return tuple(parsed)
 
 
-def _iter_resume_strings(value: object) -> tuple[str, ...]:
-    result: list[str] = []
-    stack: list[object] = [value]
-    remaining = 100_000
-    while stack:
-        remaining -= 1
-        if remaining < 0:
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-        current = stack.pop()
-        if type(current) is str:
-            result.append(current)
-        elif type(current) in {list, tuple}:
-            stack.extend(current)
-        elif type(current) in {dict, MappingProxyType}:
-            stack.extend(current.values())
-        elif current is not None and type(current) not in {bool, int, float, bytes}:
-            raise ResumePatchError(_WORKFLOW_PATCH_ERROR)
-    return tuple(result)
+def _resolve_skill_matches(
+    category: Mapping[str, Any],
+    proposed_matches: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    items = category.get("items")
+    if type(items) is not dict:
+        return None
+    inventory = _visible_skill_items(items)
+    display_items = [
+        *inventory.get("primary", []),
+        *inventory.get("additional", []),
+    ]
+    display_by_key = {_claim_text(item): item for item in display_items}
+    raw_match_terms = items.get("match_terms")
+    if raw_match_terms is None:
+        raw_match_terms = {}
+    if type(raw_match_terms) is not dict:
+        return None
+    aliases: dict[str, str] = {}
+    for raw_skill, raw_terms in raw_match_terms.items():
+        if type(raw_skill) is not str:
+            return None
+        display = display_by_key.get(_claim_text(raw_skill))
+        if display is None:
+            continue
+        try:
+            terms = _skill_match_values(raw_terms, require_unique=False)
+        except ResumePatchError:
+            return None
+        for term in terms:
+            aliases[_claim_text(term)] = display
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for proposed in proposed_matches:
+        key = _claim_text(proposed)
+        display = display_by_key.get(key, aliases.get(key))
+        if display is None:
+            return None
+        display_key = _claim_text(display)
+        if display_key in seen:
+            return None
+        seen.add(display_key)
+        resolved.append(display)
+    return tuple(resolved)
 
 
 def _materialize_inert(

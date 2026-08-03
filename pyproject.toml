@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "career-agent-workbench"
-version = "1.1.0"
+version = "1.2.0"
 description = "A public-safe scaffold for governed career workflow automation."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -73,7 +73,7 @@ include = [
   "/docs/assets/tracker-main-annotated.png",
   "/docs/behavior-coverage.md",
   "/docs/release-notes/1.0.0.md",
-  "/docs/release-notes/1.1.0.md",
+  "/docs/release-notes/1.2.0.md",
   "/examples/demo-workspace/.blacklist",
   "/examples/demo-workspace/README.md",
   "/examples/demo-workspace/jobs/demo-platform-engineer.json",
@@ -129,6 +129,7 @@ include = [
   "/src/career_agent_workbench/webapp_artifacts.py",
   "/src/career_agent_workbench/webapp_editors.py",
   "/src/career_agent_workbench/webapp_ingestion.py",
+  "/src/career_agent_workbench/webapp_resume_fields.py",
   "/src/career_agent_workbench/webapp_tracker.py",
   "/src/career_agent_workbench/workflows/__init__.py",
   "/src/career_agent_workbench/workflows/applications.py",
@@ -189,6 +190,7 @@ include = [
   "/tests/test_webapp_cover_letters.py",
   "/tests/test_webapp_editors.py",
   "/tests/test_webapp_ingestion.py",
+  "/tests/test_webapp_resume_fields.py",
   "/tests/test_webapp_tracker.py",
 ]
 

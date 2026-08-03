@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from career_agent_workbench.application_state import (
     workflow_revision_token,
 )
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
+from career_agent_workbench.webapp_resume_fields import resume_field_model
 
 
 def _diagnostics(score: int = 88):
@@ -240,12 +242,14 @@ def test_resume_save_sync_revert_and_conflict_are_active_target_scoped(
     stale_token = workflow_revision_token(reverted.edit_revision)
     store.select_resume_variant("fictional-job", "v1")
     before_conflict = store.get_workflow_snapshot("fictional-job")
+    calls_before_conflict = len(ats_calls)
     conflict = client.post(
         "/resumes/fictional-job/edit",
         data={"revision": stale_token, "yaml_text": "name: Rejected\n"},
     )
     assert conflict.status_code == 409
     assert store.get_workflow_snapshot("fictional-job") == before_conflict
+    assert len(ats_calls) == calls_before_conflict
 
 
 def test_resume_editor_rejects_invalid_yaml_without_partial_write(
@@ -263,3 +267,106 @@ def test_resume_editor_rejects_invalid_yaml_without_partial_write(
     )
     assert response.status_code == 400
     assert store.get_workflow_snapshot("fictional-job") == before
+
+
+def test_structured_resume_save_is_lossless_revision_bound_and_ats_after_validation(
+    tmp_path: Path,
+) -> None:
+    app, store, ats_calls = _app(tmp_path)
+    client = app.test_client()
+    source_yaml = """
+header_top:
+  line_1_name_header_text: Jules Example
+  contact_items: [jules@example.test, Portfolio]
+  links:
+    - label: Portfolio
+      url: https://portfolio.example.test
+      unknown_link: preserve
+professional_summary:
+  paragraph: Builds synthetic systems.
+professional_experience:
+  jobs:
+    - order: '01'
+      line_1:
+        company_name_text: Example Systems
+        position_name_text: Engineer
+        position_dates_text: 2024-Present
+        unknown_line: preserve
+      bullet_points:
+        - text: Built bounded tools.
+          evidence_ids: [example-1]
+unknown_section:
+  preserve: [one, two]
+""".lstrip()
+    store.upsert_resume_variant(
+        "fictional-job",
+        ResumeVariantWrite(
+            variant_key="v2",
+            variant_label="Second draft",
+            source="synthetic",
+            parent_variant_key="v1",
+            application_resume_yaml=source_yaml,
+            resume_html="<p>before</p>",
+            resume_pdf=b"pdf-before",
+        ),
+    )
+    before = store.get_workflow_snapshot("fictional-job")
+    page = client.get("/resumes/fictional-job/edit")
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "Save structured fields and render" in html
+    assert "Advanced YAML escape hatch" in html
+    assert 'target="_blank" rel="noopener noreferrer">HTML preview</a>' in html
+    assert 'target="_blank" rel="noopener noreferrer">PDF preview</a>' in html
+    assert store.get_workflow_snapshot("fictional-job") == before
+    schema = client.get("/resumes/structured-fields")
+    assert schema.status_code == 200
+    assert schema.get_json()["lossless_unknown_values"] is True
+    assert store.get_workflow_snapshot("fictional-job") == before
+
+    payload = resume_field_model(before.application.application_resume)
+    payload["professional_experience"]["jobs"][0]["role"] = "Senior Engineer"
+    payload["header_top"]["contact_items"] = list(
+        reversed(payload["header_top"]["contact_items"])
+    )
+    calls_before = len(ats_calls)
+    response = client.post(
+        "/resumes/fictional-job/edit",
+        data={
+            "revision": workflow_revision_token(before.edit_revision),
+            "structured_payload": json.dumps(payload),
+        },
+    )
+
+    assert response.status_code == 302
+    saved = store.get_workflow_snapshot("fictional-job")
+    assert saved.application.selected_resume_variant == "v2"
+    assert saved.application.resume_variant_selection_mode == "auto"
+    assert saved.application.application_resume["unknown_section"] == {
+        "preserve": ("one", "two")
+    }
+    job = saved.application.application_resume["professional_experience"]["jobs"][0]
+    assert job["line_1"]["position_name_text"] == "Senior Engineer"
+    assert job["line_1"]["unknown_line"] == "preserve"
+    assert job["bullet_points"][0]["evidence_ids"] == ("example-1",)
+    assert saved.application.application_resume_backup == (
+        before.application.application_resume
+    )
+    assert len(ats_calls) == calls_before + 1
+
+    invalid = resume_field_model(saved.application.application_resume)
+    invalid["header_top"]["contact_items"].append(
+        invalid["header_top"]["contact_items"][0]
+    )
+    before_invalid = store.get_workflow_snapshot("fictional-job")
+    invalid_calls = len(ats_calls)
+    rejected = client.post(
+        "/resumes/fictional-job/edit",
+        data={
+            "revision": workflow_revision_token(before_invalid.edit_revision),
+            "structured_payload": json.dumps(invalid),
+        },
+    )
+    assert rejected.status_code == 400
+    assert store.get_workflow_snapshot("fictional-job") == before_invalid
+    assert len(ats_calls) == invalid_calls

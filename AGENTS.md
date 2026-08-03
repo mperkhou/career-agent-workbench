@@ -37,5 +37,5 @@ repository.
   and public-tree safety. Release readiness additionally requires the complete
   suite, wheel/sdist build and scan, isolated wheel smoke, offline Chromium,
   browser workbench, and injected MCP stdio checks.
-- The `1.1.0` PR stays unmerged and untagged until G04 and explicit user
-  approval. Preserve normal reviewed commits; do not squash or rebase them.
+- Release PRs stay unmerged and untagged until their final gate and explicit
+  user approval. Preserve normal reviewed commits; do not squash or rebase them.

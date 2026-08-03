@@ -60,6 +60,22 @@ def _app(tmp_path: Path):
             resume_html="<p>fictional-v2</p>",
             resume_pdf=b"%PDF-fictional-v2",
             ats=AtsFields(score=82, missing_terms="two"),
+            evidence_packet={"private_value": "synthetic-evidence-secret"},
+            external_critique={"raw": "synthetic-provider-secret"},
+            critique={
+                "proposed_changes": [
+                    {"change_id": "change-1", "text": "synthetic-private-change"}
+                ],
+                "accepted_change_ids": ["change-1"],
+            },
+            validation={
+                "rejected_changes": [{"reason": "synthetic-private-reason"}],
+                "is_valid": True,
+            },
+            model_metadata={
+                "model": "synthetic-private-model",
+                "review_state": "awaiting_user_review",
+            },
         ),
     )
     return app, store, paths
@@ -122,18 +138,71 @@ def test_variant_review_uses_the_declared_parent(tmp_path: Path) -> None:
         item for item in comparisons if item["variant"].variant_key == "manual"
     )
     assert manual["parent"] == "v1"
-    assert manual["changed_fields"] == ("manual_only",)
-    assert manual["unified_diff"][:2] == ("--- v1", "+++ manual")
-    assert any("manual_only" in line for line in manual["unified_diff"])
-    assert not any("Fictional Two" in line for line in manual["unified_diff"])
+    assert manual["aro_comparison"] == {
+        "added_count": 1,
+        "removed_count": 0,
+        "changed_count": 0,
+        "added_fields": ("manual_only",),
+        "removed_fields": (),
+        "changed_fields": (),
+        "truncated": False,
+    }
+    assert manual["ats_comparison"]["metrics"]["overall"] == {
+        "parent": 71,
+        "current": 86,
+        "delta": 15,
+    }
 
     page = app.test_client().get("/resumes/fictional-job/variants")
     assert page.status_code == 200
     manual_section = page.get_data(as_text=True).split(
         'data-variant-key="manual"', maxsplit=1
     )[1]
-    assert "--- v1" in manual_section
-    assert "+++ manual" in manual_section
+    assert "Declared parent: v1" in manual_section
+    assert "Added 1, removed 0," in manual_section
+    assert "manual_only" in manual_section
+    assert "Fictional One" not in manual_section
+    assert "Fictional Two" not in manual_section
+
+
+def test_variant_review_evidence_is_bounded_and_missing_optional_is_explicit(
+    tmp_path: Path,
+) -> None:
+    app, store, _paths = _app(tmp_path)
+    comparisons = variant_review(store.get_workflow_snapshot("fictional-job"))
+    baseline = next(item for item in comparisons if item["variant"].variant_key == "v1")
+    refined = next(item for item in comparisons if item["variant"].variant_key == "v2")
+    assert baseline["parent"] is None
+    assert baseline["aro_comparison"] is None
+    assert baseline["ats_comparison"] is None
+    assert baseline["evidence"] == {
+        "evidence_packet": "not recorded",
+        "external_critique": "not recorded",
+        "critique": "not recorded",
+        "validation": "not recorded",
+        "accepted_count": None,
+        "rejected_count": None,
+    }
+    assert refined["parent"] == "v1"
+    assert refined["evidence"]["accepted_count"] == 1
+    assert refined["evidence"]["rejected_count"] == 1
+    assert refined["review_metadata"]["validation_outcome"] is True
+    assert refined["review_metadata"]["review_state"] == "awaiting_user_review"
+
+    page = app.test_client().get("/resumes/fictional-job/variants")
+    assert page.status_code == 200
+    text = page.get_data(as_text=True)
+    assert "No parent comparison applies to this baseline variant." in text
+    assert "Accepted evidence</dt><dd>1" in text
+    assert "Rejected evidence</dt><dd>1" in text
+    for forbidden in (
+        "synthetic-evidence-secret",
+        "synthetic-provider-secret",
+        "synthetic-private-change",
+        "synthetic-private-reason",
+        "synthetic-private-model",
+    ):
+        assert forbidden not in text
 
 
 def test_selection_reset_and_tracker_workbench_links(tmp_path: Path) -> None:

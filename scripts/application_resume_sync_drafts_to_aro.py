@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
     ApplicationStateStore,
     AtsFields,
     ResumeVariantWrite,
@@ -59,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected = set(args.job_ids or ())
         records = [
             record
-            for record in store.list_applications("active", limit=10_000)
+            for record in store.list_applications("active", limit=MAX_QUERY_RESULTS)
             if not selected or record.job_id in selected
         ]
         if args.limit is not None:
@@ -105,13 +106,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         formatting_risk=score.formatting_risk,
                         missing_terms=", ".join(score.missing_high_value_terms),
                     ),
-                    ats_diagnostics=asdict(diagnostics),
-                    evidence_packet=variant.evidence_packet,
-                    external_critique=variant.external_critique,
-                    critique=variant.critique,
-                    validation=variant.validation,
+                    ats_diagnostics=_materialize(asdict(diagnostics)),
+                    evidence_packet=_optional_materialized(variant.evidence_packet),
+                    external_critique=_optional_materialized(variant.external_critique),
+                    critique=_optional_materialized(variant.critique),
+                    validation=_optional_materialized(variant.validation),
                     model_metadata={
-                        **dict(variant.model_metadata or {}),
+                        **(_optional_materialized(variant.model_metadata) or {}),
                         "render_sync": "packaged_template",
                         "review_state": "awaiting_user_review",
                     },
@@ -123,6 +124,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("Draft synchronization could not be completed.")
     print(json.dumps({"processed": processed}, sort_keys=True))
     return 0
+
+
+def _optional_materialized(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    materialized = _materialize(value)
+    if type(materialized) is not dict:
+        raise ValueError("Stored review metadata is invalid.")
+    return materialized
 
 
 if __name__ == "__main__":

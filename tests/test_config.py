@@ -1151,7 +1151,7 @@ def test_values_paths_errors_and_output_are_secret_safe(
     ("flag", "expected"),
     (
         ("--help", "Career Agent Workbench"),
-        ("--version", "career-agent-workbench 1.1.0"),
+        ("--version", "career-agent-workbench 1.2.0"),
     ),
 )
 def test_help_and_version_need_no_configuration(

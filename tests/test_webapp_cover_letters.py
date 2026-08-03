@@ -62,7 +62,19 @@ def test_blank_edit_save_sanitize_and_artifact_responses_are_isolated(
 
     blank = client.get("/applications/fictional-job/cover-letter")
     assert blank.status_code == 200
-    assert 'name="body_html"' in blank.get_data(as_text=True)
+    blank_page = blank.get_data(as_text=True)
+    assert 'name="body_html"' in blank_page
+    assert 'data-cover-editor contenteditable="true" role="textbox"' in blank_page
+    assert 'role="toolbar" aria-label="Cover letter formatting"' in blank_page
+    assert 'data-cover-command="formatBlock"' in blank_page
+    assert 'data-cover-command="bold"' in blank_page
+    assert 'data-cover-command="italic"' in blank_page
+    assert 'data-cover-command="insertLineBreak"' in blank_page
+    assert 'data-cover-command="createLink"' in blank_page
+    assert "data-cover-preview" in blank_page
+    assert "data-cover-recover" in blank_page
+    assert 'target="_blank" rel="noopener noreferrer">View PDF' in blank_page
+    assert "/static/webapp/app.js" in blank_page
     assert store.get_application("fictional-job") == before
 
     saved = client.post(
@@ -113,6 +125,75 @@ def test_blank_edit_save_sanitize_and_artifact_responses_are_isolated(
     assert inline.headers["Content-Disposition"].startswith("inline;")
     assert download.headers["Content-Disposition"].startswith("attachment;")
     assert client.get("/cover-letters/missing-job").status_code == 404
+
+
+def test_cover_letter_get_sanitizes_recovery_source_without_mutating(
+    tmp_path: Path,
+) -> None:
+    app, store, _paths = _app(tmp_path)
+    store.store_clo(
+        "fictional-job",
+        value={
+            "schema_version": 1,
+            "source": "manual",
+            "body_html": (
+                '<p onclick="privateMarker()"><b>Visible</b> '
+                '<a href="javascript:privateMarker()">link</a></p>'
+                "<script>privateMarker()</script>"
+            ),
+            "body_text": "Visible link",
+        },
+        pdf_content=b"%PDF-synthetic",
+    )
+    before = store.get_application("fictional-job")
+
+    response = app.test_client().get("/applications/fictional-job/cover-letter")
+
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "Visible" in page
+    assert "privateMarker" not in page
+    assert "onclick" not in page
+    assert "javascript:" not in page
+    assert store.get_application("fictional-job") == before
+
+
+def test_cover_letter_client_adapter_sanitizes_editor_source_and_preview(
+    tmp_path: Path,
+) -> None:
+    app, _store, _paths = _app(tmp_path)
+    script = app.test_client().get("/static/webapp/app.js")
+
+    assert script.status_code == 200
+    source = script.get_data(as_text=True)
+    assert "sanitizedCoverFragment" in source
+    assert "coverRemovedTags" in source
+    assert "renderCoverPreview(sanitized)" in source
+    assert "coverSource.value = sanitized" in source
+    assert "event.preventDefault();" in source
+    assert (
+        'document.execCommand("insertHTML", false, sanitizedCoverHtml(value))' in source
+    )
+
+
+def test_invalid_cover_letter_posts_are_atomic_and_content_free(tmp_path: Path) -> None:
+    app, store, _paths = _app(tmp_path)
+    client = app.test_client()
+    before = store.get_application("fictional-job")
+
+    missing = client.post("/applications/fictional-job/cover-letter", data={})
+    oversized = client.post(
+        "/applications/fictional-job/cover-letter",
+        data={"body_html": "x" * 500_001},
+    )
+
+    assert missing.status_code == oversized.status_code == 400
+    assert (
+        missing.get_data(as_text=True)
+        == oversized.get_data(as_text=True)
+        == ("Cover letter update is invalid.")
+    )
+    assert store.get_application("fictional-job") == before
 
 
 def test_cover_letter_copy_is_explicit_and_bounded(tmp_path: Path) -> None:

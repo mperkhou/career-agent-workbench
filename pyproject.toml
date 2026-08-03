@@ -129,6 +129,7 @@ include = [
   "/src/career_agent_workbench/webapp_artifacts.py",
   "/src/career_agent_workbench/webapp_editors.py",
   "/src/career_agent_workbench/webapp_ingestion.py",
+  "/src/career_agent_workbench/webapp_resume_fields.py",
   "/src/career_agent_workbench/webapp_tracker.py",
   "/src/career_agent_workbench/workflows/__init__.py",
   "/src/career_agent_workbench/workflows/applications.py",
@@ -189,6 +190,7 @@ include = [
   "/tests/test_webapp_cover_letters.py",
   "/tests/test_webapp_editors.py",
   "/tests/test_webapp_ingestion.py",
+  "/tests/test_webapp_resume_fields.py",
   "/tests/test_webapp_tracker.py",
 ]
 

@@ -830,7 +830,7 @@ def _rendered_skill_items(value: object, *, seen: set[str]) -> list[str]:
         matched_keys: set[str] = set()
         for item in _string_list(value.get("jod_matched_items")):
             item_key = _skill_key(item)
-            canonical = aliases.get(item_key, display_by_key.get(item_key, item))
+            canonical = display_by_key.get(item_key, aliases.get(item_key, item))
             canonical_key = _skill_key(canonical)
             additional_item = additional_by_key.get(canonical_key)
             if additional_item is None or canonical_key in matched_keys:

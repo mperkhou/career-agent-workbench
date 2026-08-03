@@ -77,6 +77,12 @@ from career_agent_workbench.webapp_editors import (
     render_resume_edit,
     resume_yaml_text,
 )
+from career_agent_workbench.webapp_resume_fields import (
+    apply_resume_field_payload,
+    resume_field_capabilities,
+    resume_field_model,
+    resume_field_payload_text,
+)
 from career_agent_workbench.webapp_tracker import (
     TRACKER_DIRECTIONS,
     TRACKER_SORTS,
@@ -85,6 +91,7 @@ from career_agent_workbench.webapp_tracker import (
     TrackerViewError,
     tracker_applications,
     tracker_counts,
+    tracker_rows,
 )
 
 _EXTENSION_KEY = "career_agent_workbench"
@@ -317,13 +324,14 @@ def create_app(
         try:
             view = _tracker_view()
             applications = tracker_applications(store, view)
+            rows = tracker_rows(store, applications)
         except TrackerViewError:
             return "Application scope is invalid.", 400
         except Exception:  # noqa: BLE001 - keep store failures content-free.
             return "Tracker data is unavailable.", 503
         return render_template(
             "webapp/index.html",
-            applications=applications,
+            rows=rows,
             view=view,
             counts=tracker_counts(applications),
             tracker_statuses=TRACKER_STATUSES,
@@ -838,6 +846,9 @@ def create_app(
             snapshot.application.application_resume_backup is not None
             and snapshot.application.application_resume_backup_target == target
         )
+        if snapshot.application.application_resume is None:
+            return "Resume was not found.", 404
+        fields = resume_field_model(snapshot.application.application_resume)
         return render_template(
             "webapp/resume_edit.html",
             application=snapshot.application,
@@ -845,19 +856,45 @@ def create_app(
             revision=workflow_revision_token(snapshot.edit_revision),
             target=target,
             can_revert=can_revert,
+            resume_fields=fields,
+            resume_fields_json=resume_field_payload_text(
+                snapshot.application.application_resume
+            ),
             result=result,
             view=view,
         )
+
+    @app.get("/resumes/structured-fields")
+    def structured_resume_fields():
+        return jsonify(resume_field_capabilities())
 
     def _resume_mutation(job_id: str, operation: str):
         try:
             view = _tracker_view(form=True)
             revision = workflow_revision_from_token(request.form.get("revision"))
             snapshot = store.get_workflow_snapshot(job_id)
+            if snapshot.edit_revision != revision:
+                raise ApplicationStateConflictError
             if operation == "save":
-                if "yaml_text" not in request.form:
+                if (
+                    "structured_payload" in request.form
+                    and "yaml_text" not in request.form
+                ):
+                    if snapshot.application.application_resume is None:
+                        raise ValueError
+                    mapping = apply_resume_field_payload(
+                        snapshot.application.application_resume,
+                        request.form["structured_payload"],
+                    )
+                    yaml_text = resume_yaml_text(mapping)
+                elif (
+                    "yaml_text" in request.form
+                    and "structured_payload" not in request.form
+                ):
+                    yaml_text = request.form["yaml_text"]
+                else:
                     raise ValueError
-                rendered = _render_active_resume(request.form["yaml_text"], snapshot)
+                rendered = _render_active_resume(yaml_text, snapshot)
                 store.store_active_resume_if_revision(
                     job_id,
                     yaml_text=rendered.yaml_text,

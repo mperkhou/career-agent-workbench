@@ -17,6 +17,88 @@
   terminalStates.add("partial");
   let currentActionId = null;
 
+  function setPath(target, path, value) {
+    let selected = target;
+    for (const key of path.slice(0, -1)) {
+      selected = selected[key];
+    }
+    selected[path[path.length - 1]] = value;
+  }
+
+  function editorValue(control, originalValue) {
+    if (control.type === "checkbox") {
+      return control.checked;
+    }
+    if (control.dataset.valueType === "lines") {
+      return control.value === "" ? [] : control.value.split(/\r?\n/);
+    }
+    if (control.dataset.valueType === "optional-integer") {
+      return control.value === "" ? "" : Number(control.value);
+    }
+    if (
+      control.dataset.valueType === "number-or-text"
+      && typeof originalValue === "number"
+      && String(originalValue) === control.value
+    ) {
+      return originalValue;
+    }
+    return control.value;
+  }
+
+  function directRowControls(row) {
+    return [...row.querySelectorAll("[data-item-field]")].filter(
+      (control) => control.closest("[data-resume-row]") === row,
+    );
+  }
+
+  function directNestedLists(row) {
+    return [...row.querySelectorAll("[data-resume-list][data-list-field]")].filter(
+      (list) => list.closest("[data-resume-row]") === row,
+    );
+  }
+
+  function serializeEditorList(list) {
+    const rows = [...list.children].filter((child) => child.matches("[data-resume-row]"));
+    return rows.map((row) => {
+      const item = JSON.parse(row.dataset.item);
+      for (const control of directRowControls(row)) {
+        const key = control.dataset.itemField;
+        item[key] = editorValue(control, item[key]);
+      }
+      for (const nested of directNestedLists(row)) {
+        item[nested.dataset.listField] = serializeEditorList(nested);
+      }
+      return item;
+    });
+  }
+
+  function serializeStructuredResume(form) {
+    const payloadControl = form.querySelector("[name=structured_payload]");
+    const payload = JSON.parse(payloadControl.value);
+    for (const control of form.querySelectorAll("[data-resume-field]")) {
+      if (control.closest("[data-resume-row]")) {
+        continue;
+      }
+      const path = JSON.parse(control.dataset.resumeField);
+      setPath(payload, path, editorValue(control, undefined));
+    }
+    for (const list of form.querySelectorAll("[data-resume-list][data-resume-path]")) {
+      if (list.closest("[data-resume-row]")) {
+        continue;
+      }
+      setPath(payload, JSON.parse(list.dataset.resumePath), serializeEditorList(list));
+    }
+    payloadControl.value = JSON.stringify(payload);
+  }
+
+  function appendTemplate(list, templateId) {
+    const template = document.getElementById(templateId);
+    if (!template || list.children.length >= 100) {
+      return;
+    }
+    list.append(template.content.cloneNode(true));
+  }
+
   function feedbackText(payload, fallback) {
     const parts = [payload.message || fallback];
     if (Number.isInteger(payload.accepted)) {
@@ -222,6 +304,16 @@
   });
 
   document.addEventListener("submit", (event) => {
+    const structuredForm = event.target.closest("form[data-structured-resume-form]");
+    if (structuredForm) {
+      try {
+        serializeStructuredResume(structuredForm);
+      } catch {
+        event.preventDefault();
+        renderFeedback({}, "Structured resume data is invalid.");
+      }
+      return;
+    }
     const form = event.target.closest(
       "form[data-action-form], form[data-background-form], form[data-ingestion-form]",
     );
@@ -233,6 +325,44 @@
     }
     event.preventDefault();
     submitForm(form);
+  });
+
+  document.addEventListener("click", (event) => {
+    const addTarget = event.target.closest("[data-add-target]");
+    if (addTarget) {
+      const list = document.getElementById(addTarget.dataset.addTarget);
+      if (list) {
+        appendTemplate(list, addTarget.dataset.addTemplate);
+      }
+      return;
+    }
+    const addLocal = event.target.closest("[data-add-local]");
+    if (addLocal) {
+      const group = addLocal.closest("[data-list-group]");
+      const list = group?.querySelector(":scope > [data-resume-list]");
+      if (list) {
+        appendTemplate(list, addLocal.dataset.addLocal);
+      }
+      return;
+    }
+    const remove = event.target.closest("[data-remove-row]");
+    if (remove) {
+      remove.closest("[data-resume-row]")?.remove();
+      return;
+    }
+    const move = event.target.closest("[data-move-row]");
+    if (!move) {
+      return;
+    }
+    const row = move.closest("[data-resume-row]");
+    if (!row) {
+      return;
+    }
+    if (move.dataset.moveRow === "up" && row.previousElementSibling) {
+      row.parentElement.insertBefore(row, row.previousElementSibling);
+    } else if (move.dataset.moveRow === "down" && row.nextElementSibling) {
+      row.parentElement.insertBefore(row.nextElementSibling, row);
+    }
   });
 
   renderPreferredAction();

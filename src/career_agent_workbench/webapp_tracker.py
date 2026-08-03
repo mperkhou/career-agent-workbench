@@ -99,6 +99,34 @@ class TrackerView:
         return tuple((f"view_{key}", value) for key, value in self.query_items)
 
 
+@dataclass(frozen=True, slots=True)
+class TrackerRow:
+    """Dense presentation metadata for one immutable application row."""
+
+    application: ApplicationRecord
+    variant_keys: tuple[str, ...]
+    status_key: str
+
+
+def tracker_rows(
+    store: ApplicationStateStore,
+    applications: Sequence[ApplicationRecord],
+) -> tuple[TrackerRow, ...]:
+    """Attach bounded variant and status metadata without mutating state."""
+
+    return tuple(
+        TrackerRow(
+            application=application,
+            variant_keys=tuple(
+                variant.variant_key
+                for variant in store.list_resume_variants(application.job_id)
+            ),
+            status_key=_status_key(application.applied_to),
+        )
+        for application in applications
+    )
+
+
 def tracker_applications(
     store: ApplicationStateStore,
     view: TrackerView,
@@ -183,6 +211,16 @@ def _has_control(value: str) -> bool:
     )
 
 
+def _status_key(value: str) -> str:
+    return {
+        "No": "pending",
+        "Yes": "applied",
+        "N/A": "not-applicable",
+        "Rejected": "rejected",
+        "Accepted for interview": "interview",
+    }[value]
+
+
 __all__ = [
     "TRACKER_DIRECTIONS",
     "TRACKER_SCOPES",
@@ -190,6 +228,8 @@ __all__ = [
     "TRACKER_STATUSES",
     "TrackerView",
     "TrackerViewError",
+    "TrackerRow",
     "tracker_applications",
     "tracker_counts",
+    "tracker_rows",
 ]

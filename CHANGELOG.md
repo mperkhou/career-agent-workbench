@@ -12,6 +12,10 @@
   evidence only through its matching gate, use fresh clones from one immutable
   digest-bound setup baseline, and delete content-bearing evidence promptly
   after review or immediately when retention becomes unsafe.
+- Added a bounded pre-P03 manual-pass compatibility repair that freezes v2's
+  skill taxonomy and inventory, limits model edits to category-matched visible
+  items, prefers exact display skills over aliases, and keeps private Jenkins
+  mappings and deferred repair notes outside Git.
 
 ## [1.1.0] - 2026-08-02
 

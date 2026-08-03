@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.0] - In progress
+
+### Changed
+
+- Initialized the archive-first Flask replacement workflow: the mature
+  archived application is now the UI and route source of truth, while the
+  public repository's external-workspace and PII-exclusion boundaries remain
+  mandatory adapters rather than reasons to reconstruct the frontend.
+
 ## [1.2.0] - In progress
 
 ### Added

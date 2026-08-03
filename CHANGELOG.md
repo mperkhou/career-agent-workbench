@@ -16,6 +16,9 @@
   skill taxonomy and inventory, limits model edits to category-matched visible
   items, prefers exact display skills over aliases, and keeps private Jenkins
   mappings and deferred repair notes outside Git.
+- Bound P03/G03 to a separate immutable post-patch legacy snapshot while
+  preserving the accepted pre-patch G01/G02 evidence, preventing live archived
+  repository drift from rewriting completed gate history.
 
 ## [1.1.0] - 2026-08-02
 

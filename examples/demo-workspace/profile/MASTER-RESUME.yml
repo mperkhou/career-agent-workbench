@@ -1,85 +1,1697 @@
+schema_version: career_agent_workbench.master_resume.v1
+source:
+  text_path: profile/MP-MASTER-RESUME.txt
+  pdf_path: null
+  page_count: null
+  extraction_method: g01_approved_public_text
+section_order:
+- header_top
+- professional_summary
+- core_technical_skills
+- professional_experience
+- education
+- certifications
+- portfolio
 basics:
-  name: Avery Demo
-  label: Fictional Platform Builder
-  email: avery.demo@example.test
-  url: https://avery-demo.example.test
-  summary: Builds clear, reliable fictional services for offline demonstrations.
+  render: true
+  name: Tessa Rowan
+  label: Senior Platform & Reliability Engineer
+  location: Fort Haven, CO
+  phone: +1 (303) 555-0142
+  email: tessa.rowan@example.test
+  url: https://tessa-rowan.example.test
+  summary: Senior platform and reliability engineer with more than a decade of experience building shared automation services, distributed systems, developer tooling, observability pipelines, and cloud infrastructure. Tessa combines Python engineering with configuration management, operational support, and governed AI-assisted delivery, turning recurring service needs into maintainable tools that are tested, documented, and released through explicit human review.
+  fictionalization_notice: 'Public Demonstration Notice: The person, organizations, locations, dates, credentials, and project examples in this resume are fictionalized for a public demonstration and do not describe a real individual or employer.'
 header_top:
-  line_1_name_header_text: Avery Demo
-  line_2_header_text: Fictional Platform Builder
+  render: true
+  line_1_name_header_text: Tessa Rowan
+  line_2_header_text: Senior Platform & Reliability Engineer
+  line_3_applicant_info_text: Fort Haven, CO | +1 (303) 555-0142 | tessa.rowan@example.test | https://tessa-rowan.example.test
   contact_items:
-    - avery.demo@example.test
-    - Demo Portfolio
+  - Fort Haven, CO
+  - +1 (303) 555-0142
+  - tessa.rowan@example.test
+  - Portfolio
   links:
-    - label: avery.demo@example.test
-      url: mailto:avery.demo@example.test
-    - label: Demo Portfolio
-      url: https://avery-demo.example.test
+  - label: tessa.rowan@example.test
+    url: mailto:tessa.rowan@example.test
+  - label: Portfolio
+    url: https://tessa-rowan.example.test
 professional_summary:
-  paragraph: Builds clear, reliable fictional services for offline demonstrations.
+  render: true
+  header_text: Professional Summary
+  paragraph: Senior platform and reliability engineer with more than a decade of experience building shared automation services, distributed systems, developer tooling, observability pipelines, and cloud infrastructure. Tessa combines Python engineering with configuration management, operational support, and governed AI-assisted delivery, turning recurring service needs into maintainable tools that are tested, documented, and released through explicit human review.
+  summary_note: 'Public Demonstration Notice: The person, organizations, locations, dates, credentials, and project examples in this resume are fictionalized for a public demonstration and do not describe a real individual or employer.'
 core_technical_skills:
+  render: true
+  header_text: Core Technical Skills
   bullet_points:
-    - category: Languages and Services
-      items:
-        primary:
-          - Python
-          - Flask
-        additional:
-          - SQLite
-          - REST APIs
-        match_terms:
-          Python:
-            - automation
-          Flask:
-            - web service
-      jod_matched_items: []
-    - category: Reliability
-      items:
-        primary:
-          - Observability
-          - Testing
-        additional:
-          - Incident Review
-      jod_matched_items: []
+  - order: 1
+    category: Languages & Frameworks
+    items:
+      primary:
+      - Python
+      - Go
+      - Ruby
+      - TypeScript
+      additional:
+      - JavaScript
+      - React
+      - Node.js
+      - Bash
+      - PowerShell
+      - Django
+      - Flask
+      - Ruby on Rails
+      match_terms:
+        Python:
+        - automation
+        - Python services
+        - Python tooling
+        Go:
+        - Golang
+        JavaScript:
+        - JS
+        - frontend scripting
+    jod_matched_items: []
+  - order: 2
+    category: Distributed Systems & Cloud
+    items:
+      primary:
+      - AWS
+      - Azure
+      - public cloud infrastructure
+      - OpenSearch
+      additional:
+      - Elasticsearch
+      - Docker
+      - Kubernetes
+      match_terms:
+        AWS:
+        - Amazon Web Services
+        Azure:
+        - Microsoft Azure
+        - Azure Cloud
+        OpenSearch:
+        - managed search
+        - search cluster
+    jod_matched_items: []
+  - order: 3
+    category: Platform & API Engineering
+    items:
+      primary:
+      - systems architecture
+      - REST APIs
+      - API integration
+      - microservices
+      additional:
+      - typed service boundaries
+      - JSON
+      - XML
+      match_terms:
+        REST APIs:
+        - RESTful APIs
+        - web APIs
+        systems architecture:
+        - platform design
+        - service architecture
+        microservices:
+        - distributed services
+    jod_matched_items: []
+  - order: 4
+    category: Automation & IaC
+    items:
+      primary:
+      - Ansible
+      - AWX
+      - Chef Infra
+      - Terraform
+      additional:
+      - Jenkins
+      - GitHub Actions
+      - configuration policy
+      - CI/CD pipelines
+      match_terms:
+        Ansible:
+        - playbooks
+        - configuration automation
+        AWX:
+        - automation controller
+        - job controller
+        Chef Infra:
+        - Chef
+        - cookbooks
+        - policies
+    jod_matched_items: []
+  - order: 5
+    category: Data & Observability
+    items:
+      primary:
+      - SQL
+      - PostgreSQL
+      - MongoDB
+      - Kafka
+      additional:
+      - Filebeat
+      - Logstash
+      - OpenSearch
+      - Grafana
+      - Prometheus
+      - event pipelines
+      - service dashboards
+      match_terms:
+        PostgreSQL:
+        - Postgres
+        - relational database
+        MongoDB:
+        - document database
+        Kafka:
+        - event streaming
+    jod_matched_items: []
+  - order: 6
+    category: Security & Compliance
+    items:
+      primary:
+      - secure coding
+      - vulnerability mitigation
+      - role-based access control
+      - audit logging
+      additional:
+      - change management
+      - approval-gated releases
+      match_terms:
+        role-based access control:
+        - RBAC
+        secure coding:
+        - application security
+        audit logging:
+        - audit trail
+    jod_matched_items: []
+  - order: 7
+    category: AI Tools
+    items:
+      primary:
+      - Codex
+      - ChatGPT
+      - Claude
+      - local language models
+      additional:
+      - prompt design
+      - agentic workflows
+      - Model Context Protocol servers
+      match_terms:
+        local language models:
+        - local LLMs
+        prompt design:
+        - LLM prompting
+        agentic workflows:
+        - agent workflows
+    jod_matched_items: []
+  - order: 8
+    category: Additional Languages & Frameworks
+    items:
+      primary:
+      - MATLAB
+      - R
+      - AutoIt
+      additional:
+      - CSS
+      - HTML
+      - jQuery
+      - nginx
+      - medical-image libraries
+      - PHP
+      - WordPress
+      match_terms:
+        AutoIt:
+        - AutoIT
+        medical-image libraries:
+        - medical imaging libraries
+        WordPress:
+        - WordPress website
+    jod_matched_items: []
+  - order: 9
+    category: Additional Distributed Systems & Cloud
+    items:
+      primary:
+      - VMware vSphere
+      - Microsoft 365
+      - SharePoint
+      additional:
+      - Exchange Online
+      - Active Directory
+      - DNS
+      - object storage
+      - virtual machines
+      - private-cloud clusters
+      match_terms:
+        VMware vSphere:
+        - VMware
+        - vSphere
+        - virtualization
+        Microsoft 365:
+        - Office 365
+        SharePoint:
+        - document collaboration
+    jod_matched_items: []
+  - order: 10
+    category: Additional Platform & API Engineering
+    items:
+      primary:
+      - DICOM
+      - PACS administration
+      - clinical information systems
+      additional:
+      - web servers
+      - relational databases
+      - healthcare application support
+      - paginated APIs
+      - versioned SQLite repositories
+      - platform governance
+      match_terms:
+        DICOM:
+        - medical-image transfer
+        PACS administration:
+        - PACS
+        - radiology workflow
+        clinical information systems:
+        - clinical systems
+    jod_matched_items: []
+  - order: 11
+    category: Additional Automation & IaC
+    items:
+      primary:
+      - Python automation
+      - shell automation
+      - remote software deployment
+      additional:
+      - patch orchestration
+      - configuration management at scale
+      - source-control workflows
+      - reusable job templates
+      match_terms:
+        Python automation:
+        - Python scripts
+        - Python utilities
+        shell automation:
+        - shell scripts
+        remote software deployment:
+        - remote deployment
+    jod_matched_items: []
+  - order: 12
+    category: Additional Data & Observability
+    items:
+      primary:
+      - SAN/NAS platforms
+      - ticketing dashboards
+      - automated reporting
+      additional:
+      - vulnerability scanning
+      - SIEM
+      - network monitoring
+      - image-data processing
+      - statistical analysis
+      - CSV/JSON/HTML reporting
+      - historical tracking
+      match_terms:
+        SAN/NAS platforms:
+        - shared storage
+        - SAN
+        - NAS
+        automated reporting:
+        - scheduled reports
+        - run summaries
+        SIEM:
+        - security events
+    jod_matched_items: []
+  - order: 13
+    category: Additional Security & Compliance
+    items:
+      primary:
+      - regulated-data safeguards
+      - risk assessment
+      - incident management
+      additional:
+      - disaster recovery
+      - business continuity
+      - network firewalls
+      - endpoint security
+      - control-plane authorization
+      match_terms:
+        incident management:
+        - incident response
+        - incident review
+        disaster recovery:
+        - restore testing
+        - recovery procedures
+        business continuity:
+        - continuity planning
+    jod_matched_items: []
+  - order: 14
+    category: Additional AI Tools
+    items:
+      primary:
+      - applied AI engineering
+      - portable agent workflows
+      - agent harnesses
+      additional:
+      - checkpointed plans
+      - AI-assisted reporting
+      - evaluation
+      - privacy boundaries
+      - human approval gates
+      match_terms:
+        portable agent workflows:
+        - portable workflows
+        agent harnesses:
+        - agent runtime
+        checkpointed plans:
+        - phase plans
+        - evidence gates
+    jod_matched_items: []
 professional_experience:
+  render: true
+  header_text: Professional Experience
   jobs:
+  - order: 1
+    render: true
+    min_bullet_points: 8
+    max_bullet_points: 17
+    line_1:
+      company_name_text: Northbridge Systems Cooperative | Remote
+      position_name_text: Senior Platform Reliability Engineer
+      position_dates_text: Mar 2021 - Present
+    line_2:
+      position_intro_text: Northbridge Systems Cooperative is a mid-sized technology organization whose Platform Foundations group operates shared automation, configuration, search, and observability services for internal engineering teams. Tessa contributes Python implementation, service hardening, release engineering, developer workflows, documentation, and enablement within that federated model while keeping changes reviewable and operational authority clearly separated.
+    bullet_points:
     - order: 1
       render: true
-      min_bullet_points: 1
-      max_bullet_points: 2
-      line_1:
-        company_name_text: Nimbus Quay Example Labs
-        position_name_text: Fictional Reliability Developer
-        position_dates_text: 2040 - 2042
-      bullet_points:
-        - order: 1
-          render: true
-          text: Built Python service checks and readable observability views for a fictional platform lab.
-          bullet_point_total_match_count: 0
-          categories:
-            assigned:
-              - reliability
-            matched: []
-          skills:
-            - name: Python
-              jod_match_count: 0
+      text: 'Shared Automation Platform Operations: Helped operate several isolated automation-controller deployments used across development, validation, and production-like environments. Work included controller upgrades, execution-node rebuilds, inventory synchronization, credential-bound job templates, queue recovery, workflow logging, and capacity alignment. Tessa converted repeated support cases into tested Ansible roles and documented recovery procedures, then validated changes in lower environments before coordinated rollout. Schedule audits and synthetic inventory snapshots made it possible to compare expected coverage with actual controller state before a maintenance window. The resulting platform made routine configuration work more consistent while allowing service-owning teams to retain responsibility for their own playbooks and approvals.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Automation & IaC
+        matched: []
+      skills:
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        - AWX
+        jod_match_count: 0
+      - category: Security & Compliance
+        matched:
+        - audit logging
+        - approval-gated releases
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - reusable job templates
+        - configuration management at scale
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - disaster recovery
+        jod_match_count: 0
     - order: 2
       render: true
-      min_bullet_points: 1
-      max_bullet_points: 2
-      line_1:
-        company_name_text: Cedar & Comet Example Cooperative
-        position_name_text: Demo Systems Associate
-        position_dates_text: 2038 - 2040
-      bullet_points:
-        - order: 1
-          render: true
-          text: Maintained SQLite-backed demonstration workflows and documented their human review steps.
-          bullet_point_total_match_count: 0
-          categories:
-            assigned:
-              - platform
-            matched: []
-          skills:
-            - name: SQLite
-              jod_match_count: 0
+      text: 'Secure Configuration Snapshot Services: Co-designed a Python package that separates sensitive values from device configuration snapshots, encrypts protected material, publishes redacted versions to source control, and records restore metadata. The initial adapter was deliberately refactored behind parser and storage interfaces so additional equipment families could be added without changing the core transaction flow. Tessa wrote unit and integration tests for local and remote repository behavior, failure cleanup, key rotation, retrieval, and restore preparation, giving operators a safer alternative to informal backup scripts and making extension work predictable.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Platform & API Engineering
+        matched:
+        - typed service boundaries
+        jod_match_count: 0
+      - category: Security & Compliance
+        matched:
+        - secure coding
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - source-control workflows
+        - configuration management at scale
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - disaster recovery
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: 'Inventory Collection and Asset Publishing: Built reusable Ansible roles for gathering system facts, dispatching collection by platform family, normalizing results, classifying failures, and preparing records for an enterprise asset catalog. Scheduled-run summaries separated unreachable targets, unsupported data, incomplete collection, and successful refreshes so operators could tune coverage without treating every missing field as the same defect. Tessa also created a reusable publishing boundary with validation and dry-run behavior, connecting automation output to downstream inventory consumers without embedding catalog-specific decisions throughout the playbooks.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Automation & IaC
+        matched: []
+      skills:
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        - AWX
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - configuration management at scale
+        - reusable job templates
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: 'Policy Maintenance and Release Hygiene: Maintained shared configuration policies and selected base cookbooks for monitoring agents, package sources, runtime prerequisites, artifact migrations, and execution-environment compatibility. Changes moved through peer review, automated tests, versioned changelogs, and an approval-controlled publication service rather than direct edits to managed nodes. Tessa improved repeatability by documenting version relationships, testing upgrades against representative fixtures, and keeping policy ownership distinct from downstream application configuration. That release discipline reduced drift across environments and made rollback decisions easier to reason about during operational incidents.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Automation & IaC
+        matched: []
+      skills:
+      - category: Automation & IaC
+        matched:
+        - Chef Infra
+        - configuration policy
+        - CI/CD pipelines
+        jod_match_count: 0
+      - category: Security & Compliance
+        matched:
+        - approval-gated releases
+        - change management
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: 'Search Operations and Data Modeling: Expanded from daily OpenSearch support into health monitoring, index-template design, shard and disk analysis, field-limit checks, data-quality reporting, and remediation guides. Tessa refined component templates, aliases, mappings, and stable document identities for infrastructure and asset records, then adjusted ingestion filters so enrichment fields remained consistent across refreshes. Reindex rehearsals used disposable datasets to reveal mapping conflicts and query regressions before shared indexes changed. Monitoring covered both service health and record correctness because a green cluster can still serve misleading inventory data. This work gave downstream dashboards and support tools a clearer, more dependable search layer without tying public interfaces to one internal record producer.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - OpenSearch
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - OpenSearch
+        - service dashboards
+        - event pipelines
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        - historical tracking
+        jod_match_count: 0
+    - order: 6
+      render: true
+      text: 'Managed Search Migration: Helped move several observability datasets from self-hosted search clusters to a managed OpenSearch service. Tessa automated repeatable migration stages, compared document and time-window coverage, detected duplicate identities, reconciled late-arriving records, and kept monitoring useful while writers changed destinations. The migration was treated as a data-integrity project rather than a copy operation: acceptance evidence included counts, sampled queries, retention behavior, lifecycle-policy checks, and documented exceptions. Follow-up work addressed index bootstrapping, shipping stability, and operator playbooks so the new backend could be supported after the cutover team stepped away.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - OpenSearch
+        - Elasticsearch
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - OpenSearch
+        - event pipelines
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - historical tracking
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: 'Log Collection Reliability: Improved Filebeat and Logstash onboarding, parsing, dead-letter handling, delivery monitoring, and ownership boundaries for a multi-stage observability pipeline. Tessa added structured checks for stalled inputs, unreachable destinations, malformed configuration, and growing dead-letter queues, then connected those checks to actionable runbooks. Parser changes were tested with synthetic edge cases before rollout because an apparently small field or quoting change could silently remove records farther downstream. The work joined collection, transformation, transport, search, and alerting into one support model instead of diagnosing each component in isolation.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Data & Observability
+        matched: []
+      skills:
+      - category: Data & Observability
+        matched:
+        - Filebeat
+        - Logstash
+        - event pipelines
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        jod_match_count: 0
+    - order: 8
+      render: true
+      text: 'Operational Dashboards: Built Grafana and OpenSearch dashboards for automation jobs, scheduled-workflow timing, failed targets, queue health, deployment parity, and service-level trends. Tessa first normalized timestamps, organization labels, and outcome fields so visualizations represented comparable events, then paired dashboard panels with links to logs and remediation steps. Reviews with operators identified where a chart needed a threshold, ownership cue, or follow-up alert to influence real support behavior. The result was a practical feedback surface for troubleshooting and planning rather than a collection of presentation-only graphs.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - OpenSearch
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - OpenSearch
+        - Grafana
+        - service dashboards
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - historical tracking
+        jod_match_count: 0
+    - order: 9
+      render: true
+      text: 'Actionable Monitoring and Ownership: Developed Prometheus rules, cloud-metric checks, local health scripts, and notification routes for automation controllers, configuration services, search clusters, log shippers, managed databases, disk capacity, and stuck jobs. During team-boundary changes, Tessa helped inventory existing alerts, remove obsolete destinations, assign service ownership, and test escalation behavior using synthetic events. Each check aimed to distinguish symptoms from likely causes and to point responders toward a bounded next action. This reduced reliance on manual inspection and made handoffs clearer without allowing monitoring automation to perform unapproved production changes.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - Prometheus
+        - OpenSearch
+        - service dashboards
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - network monitoring
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 10
+      render: true
+      text: 'Test-Governed AI Assistance: Introduced coding assistants into Python maintenance through repository-local guidance that emphasized real constructors, reusable fixtures, focused test iteration, lint review, full-suite confirmation, and changelog discipline. Tessa treated generated suggestions as untrusted draft material, requiring code review and evidence from the same validation surfaces used for human-authored changes. Retrospectives captured failure patterns such as over-mocking, stale assumptions, and broad edits, then turned them into clearer constraints. The practice improved iteration speed while preserving traceability and the team''s existing engineering quality bar.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: AI Tools
+        matched:
+        - Codex
+        - prompt design
+        jod_match_count: 0
+      - category: Additional AI Tools
+        matched:
+        - evaluation
+        - human approval gates
+        jod_match_count: 0
+    - order: 11
+      render: true
+      text: 'Local Tool Runtime and Safety Boundaries: Built a local-first Python toolkit exposed through a command-line interface, a Model Context Protocol server, and an importable SDK over shared runtime logic. The design separated read operations from approval-required control actions, required explicit environment routing, rejected secret-bearing arguments, bounded result pagination, and tested authorization-sensitive paths. Safe reads used bounded retry rules, while mutation requests remained non-retrying and required a newly confirmed scope. Source-control helpers, package checks, unit tests, and static analysis made the toolkit portable across developer environments. The same core could support later service adapters without duplicating policy decisions in every interface or defaulting silently to a sensitive environment.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Platform & API Engineering
+        matched:
+        - typed service boundaries
+        jod_match_count: 0
+      - category: Security & Compliance
+        matched:
+        - role-based access control
+        - secure coding
+        - approval-gated releases
+        jod_match_count: 0
+      - category: AI Tools
+        matched:
+        - Model Context Protocol servers
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - paginated APIs
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - source-control workflows
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - control-plane authorization
+        jod_match_count: 0
+      - category: Additional AI Tools
+        matched:
+        - privacy boundaries
+        - human approval gates
+        jod_match_count: 0
+    - order: 12
+      render: true
+      text: 'Checkpointed Delivery Workflows: Packaged reusable planning and release conventions as small workflow components with committed phase plans, evidence gates, explicit handoffs, and fresh authorization before publication or external mutation. Supervisory reviews inspected actual diffs, tests, history, and prohibited actions instead of relying solely on generated summaries. Deterministic simulations exposed stale evidence, mismatched model choices, unclear delegation, and authorization gaps before teams adopted the workflow. Tessa kept issue-tracking, repository governance, and delivery orchestration as separately maintained concerns so each capability remained understandable and policy changes did not have to be copied into multiple assistants.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Security & Compliance
+        matched: []
+      skills:
+      - category: Security & Compliance
+        matched:
+        - role-based access control
+        - approval-gated releases
+        jod_match_count: 0
+      - category: AI Tools
+        matched:
+        - agentic workflows
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - source-control workflows
+        jod_match_count: 0
+      - category: Additional AI Tools
+        matched:
+        - checkpointed plans
+        - human approval gates
+        - evaluation
+        - portable agent workflows
+        jod_match_count: 0
+    - order: 13
+      render: true
+      text: 'Operational Python Utilities: Built and maintained Python tools for controller inventory, rolling upgrades, schedule analysis, search-quality reports, log-pipeline monitoring, disk checks, stuck-job detection, configuration snapshots, and HTML/CSV/JSON reporting. Utilities began with narrowly observed support needs, but production candidates gained argument validation, useful exit behavior, fixtures, tests, documentation, and a versioned delivery path. Structured result models and explicit partial-failure summaries made batch runs easier to troubleshoot without hiding skipped work. Tessa also replaced several repeated spreadsheet and shell procedures with deterministic commands whose output could be reviewed before action, lowering support toil while making operational assumptions visible to maintainers.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Platform & API Engineering
+        matched:
+        - JSON
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - HTML
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - configuration management at scale
+        - Python automation
+        - shell automation
+        - reusable job templates
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        - historical tracking
+        jod_match_count: 0
+    - order: 14
+      render: true
+      text: 'Cloud and Execution Infrastructure: Supported cloud metrics, notification policies, managed databases, serverless integration points, virtual networks, storage planning, and cross-account access needed by the platform services. Tessa diagnosed execution-node failures, rebuilt workers, coordinated rolling updates, corrected time-synchronization and capacity problems, and tracked monitoring gaps across isolated environments. Infrastructure changes were paired with verification of queued work, database reachability, telemetry, and rollback readiness. This kept the automation layer dependable enough for higher-level teams to use without implying that one engineer individually owned every shared service involved.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - object storage
+        - virtual machines
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        - disaster recovery
+        jod_match_count: 0
+    - order: 15
+      render: true
+      text: 'Service Support, Training, and Handoff: Participated in an on-call rotation and helped application teams troubleshoot automation, search, log-shipping, policy, and dashboard failures while longer projects continued. Recurring incidents became candidates for remediation guides, safer defaults, or backlog work after their immediate impact was contained. Tessa wrote operator documentation, delivered workshops, prepared training sessions, and paired with downstream engineers on playbook design and release practices. Those handoffs connected implementation work to durable service ownership and gave users a supported route to adopt shared frameworks without transferring their domain decisions to the platform group.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Automation & IaC
+        matched: []
+      skills:
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - service dashboards
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - reusable job templates
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 16
+      render: true
+      text: 'Multi-Vendor Automation Contribution: Contributed reusable components to a team-owned network automation program for scheduled configuration snapshots, restore preparation, inventory collection, normalized reporting, and asset publishing across a large mixed equipment fleet. Tessa focused on the secure Python snapshot package, data-collection roles, vendor-family dispatch, schedule validation, run summaries, and production troubleshooting rather than claiming program ownership. Investigation of repository contention, temporary-workspace cleanup, cached facts, schedule grouping, and execution timing improved the program''s ability to run repeatedly, explain partial results, and add new platform adapters without redesigning its shared foundations.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - reusable job templates
+        - configuration management at scale
+        - source-control workflows
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        - network monitoring
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - disaster recovery
+        jod_match_count: 0
+    - order: 17
+      render: true
+      text: 'Federated Platform Engineering: Worked within a model where the Platform Foundations group owns shared deployments, guardrails, lifecycle mechanisms, selected base automation, operations, training, and guidance, while consumer teams own domain-specific policies and playbooks. Tessa''s contribution spanned implementation, operational hardening, troubleshooting, observability, release workflows, documentation, and enablement. Across those areas, the consistent goal was to replace undocumented manual intervention with bounded tools, visible ownership, reviewable evidence, and maintainable support paths while respecting the distinction between enabling a workflow and authorizing its effect on a live system.'
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Automation & IaC
+        matched: []
+      skills:
+      - category: Automation & IaC
+        matched:
+        - Ansible
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - service dashboards
+        jod_match_count: 0
+      - category: Security & Compliance
+        matched:
+        - approval-gated releases
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - platform governance
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - configuration management at scale
+        - reusable job templates
+        jod_match_count: 0
+  - order: 2
+    render: true
+    min_bullet_points: 3
+    max_bullet_points: 7
+    line_1:
+      company_name_text: Alder Creek Medical Group | Fort Haven, CO
+      position_name_text: Clinical Automation Engineer
+      position_dates_text: Jul 2018 - Dec 2020
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Built Python and AutoIt deployment utilities under a documented software lifecycle, coordinating application upgrades across several hundred regulated workstation and server endpoints.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - AutoIt
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Helped design a DICOM anonymization service with a React interface, reviewable processing queues, and test datasets containing only synthetic medical-image metadata.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - React
+        - JavaScript
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - DICOM
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - image-data processing
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Diagnosed performance defects, coordinated remote patches, and documented rollback steps for highly available clinical imaging services used throughout the cooperative.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Platform & API Engineering
+        matched: []
+      skills:
+      - category: Additional Platform & API Engineering
+        matched:
+        - clinical information systems
+        - healthcare application support
+        jod_match_count: 0
+      - category: Additional Automation & IaC
+        matched:
+        - remote software deployment
+        - patch orchestration
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: Administered PACS, radiology workflow, and connected clinical-information applications while maintaining clear boundaries between infrastructure support and clinical decision-making.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Platform & API Engineering
+        matched: []
+      skills:
+      - category: Additional Platform & API Engineering
+        matched:
+        - PACS administration
+        - clinical information systems
+        - healthcare application support
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: Supported imaging servers, workstations, interfaces, and peripheral systems across multiple facilities through prioritized incident response and preventive maintenance.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Security & Compliance
+        matched: []
+      skills:
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 6
+      render: true
+      text: Wrote automation for package delivery, configuration checks, and staged patch campaigns, producing readable completion and exception reports for human review.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Security & Compliance
+        matched: []
+      skills:
+      - category: Security & Compliance
+        matched:
+        - approval-gated releases
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: Validated medical-image transfer and anonymization behavior over segmented IPv4 networks and collaborated with frontend engineers on accessible operator workflows.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Platform & API Engineering
+        matched: []
+      skills:
+      - category: Additional Platform & API Engineering
+        matched:
+        - DICOM
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - image-data processing
+        jod_match_count: 0
+  - order: 3
+    render: true
+    min_bullet_points: 4
+    max_bullet_points: 9
+    line_1:
+      company_name_text: Grayhaven Health Network | Pinehaven, CO
+      position_name_text: Infrastructure and Systems Administrator
+      position_dates_text: Jan 2017 - Jun 2018
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Led a phased refresh of aging virtualization, directory, storage, and server platforms, moving suitable services to a segregated Azure tenant with tested rollback plans.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - Azure
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - VMware vSphere
+        - virtual machines
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Integrated custom PHP workflow components with SharePoint document controls, using least-privilege service accounts and documented support ownership.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Security & Compliance
+        matched: []
+      skills:
+      - category: Security & Compliance
+        matched:
+        - role-based access control
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - PHP
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - SharePoint
+        - Microsoft 365
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Launched a centralized ticketing platform with service-health dashboards, scheduled reports, and incident categories that supported trend analysis.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Data & Observability
+        matched: []
+      skills:
+      - category: Data & Observability
+        matched:
+        - service dashboards
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: Administered clinical and business systems for a regional practice with several sites, providing tiered support while coordinating specialist vendors when appropriate.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Platform & API Engineering
+        matched: []
+      skills:
+      - category: Additional Platform & API Engineering
+        matched:
+        - clinical information systems
+        - healthcare application support
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: Replaced telephony, secure fax, printing, firewall, endpoint-protection, and remote-access services and retired unsupported operating systems through planned migrations.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Security & Compliance
+        matched: []
+      skills:
+      - category: Additional Security & Compliance
+        matched:
+        - network firewalls
+        jod_match_count: 0
+    - order: 6
+      render: true
+      text: Added directory redundancy, balanced selected web workloads, and replicated essential services to a separate private-cloud location for continuity exercises.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - private-cloud clusters
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - business continuity
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: Introduced change records, incident reviews, restore tests, and continuity checklists aligned with regulated-data and business-resilience expectations.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Security & Compliance
+        matched: []
+      skills:
+      - category: Security & Compliance
+        matched:
+        - change management
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        - disaster recovery
+        - business continuity
+        jod_match_count: 0
+    - order: 8
+      render: true
+      text: Deployed a cloud speech-recognition workflow and created concise training materials that helped providers adopt it without interrupting appointment schedules.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - public cloud infrastructure
+        jod_match_count: 0
+    - order: 9
+      render: true
+      text: Maintained the public website, updated WordPress extensions, and built governed SharePoint and OneDrive workflows for internal document collaboration.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Languages & Frameworks
+        matched: []
+      skills:
+      - category: Additional Languages & Frameworks
+        matched:
+        - WordPress
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - SharePoint
+        - Microsoft 365
+        jod_match_count: 0
+  - order: 4
+    render: true
+    min_bullet_points: 3
+    max_bullet_points: 7
+    line_1:
+      company_name_text: Harborline Media Partners | Cedar Ridge, CO
+      position_name_text: Systems Administrator, Contract
+      position_dates_text: Feb 2016 - Dec 2016
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Partnered with finance, creative, and technical leaders to plan a multi-phase infrastructure refresh that increased storage headroom and network resilience.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Platform & API Engineering
+        matched: []
+      skills:
+      - category: Platform & API Engineering
+        matched:
+        - systems architecture
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - SAN/NAS platforms
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Migrated on-premises email services to Microsoft 365 with staged identities, retention checks, client testing, and security-policy validation.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - Microsoft 365
+        - Exchange Online
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Administered web, database, identity, endpoint, backup, and network services supporting more than one hundred employees and contractors.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Platform & API Engineering
+        matched: []
+      skills:
+      - category: Additional Platform & API Engineering
+        matched:
+        - web servers
+        - relational databases
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - business continuity
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: Replaced perimeter firewalls, deployed endpoint detection across servers and workstations, and reconciled a cooperative-wide software inventory.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Security & Compliance
+        matched: []
+      skills:
+      - category: Additional Security & Compliance
+        matched:
+        - network firewalls
+        - endpoint security
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: Lowered recurring technology expense by retiring duplicate licenses and unsupported services after owners confirmed usage and retention needs.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned: []
+        matched: []
+      skills: []
+    - order: 6
+      render: true
+      text: Maintained a portfolio of Django and Node.js client sites backed by SQL databases in containerized hosting environments.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Node.js
+        - Django
+        - Python
+        jod_match_count: 0
+      - category: Data & Observability
+        matched:
+        - SQL
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: Provided tier-one through tier-three support and wrote Python and AutoIt utilities for inventory, account review, and routine maintenance.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - AutoIt
+        jod_match_count: 0
+  - order: 5
+    render: true
+    min_bullet_points: 5
+    max_bullet_points: 10
+    line_1:
+      company_name_text: Lumina Imaging Systems | Silver Falls, CO
+      position_name_text: Systems Engineer
+      position_dates_text: Aug 2012 - Jan 2016
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Developed Python transfer utilities that moved large synthetic CT image collections reliably between Linux processing hosts and shared storage systems.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - image-data processing
+        - SAN/NAS platforms
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Replaced an aging WordPress application with a tested Django service, improving maintainability, access control, and deployment repeatability.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Django
+        - Python
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - WordPress
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Owned a mixed estate of Linux and Windows hosts, network services, shared storage, security controls, and web applications as the imaging company grew.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - SAN/NAS platforms
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: Introduced vulnerability scanning, centralized security events, managed firewalls, and endpoint protection while supporting a time-bound regulated-data readiness program.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - vulnerability scanning
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - network firewalls
+        - endpoint security
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: Established change review, incident records, restore testing, disaster-recovery procedures, and business-continuity exercises for essential services.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Security & Compliance
+        matched: []
+      skills:
+      - category: Security & Compliance
+        matched:
+        - change management
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        - disaster recovery
+        - business continuity
+        jod_match_count: 0
+    - order: 6
+      render: true
+      text: Replaced end-of-life storage, file servers, switches, firewalls, and routers with supported platforms and documented capacity assumptions.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Security & Compliance
+        matched: []
+      skills:
+      - category: Additional Security & Compliance
+        matched:
+        - network firewalls
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: Migrated appropriate workloads to Azure, extended directory services, moved email to Microsoft 365, and created SharePoint document-control workflows.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Distributed Systems & Cloud
+        matched:
+        - Azure
+        - public cloud infrastructure
+        jod_match_count: 0
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - Microsoft 365
+        - SharePoint
+        - Exchange Online
+        - Active Directory
+        jod_match_count: 0
+    - order: 8
+      render: true
+      text: Built VMware networks and repeatable branch-office patterns for new locations, including monitoring, backups, and remote administration.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Distributed Systems & Cloud
+        matched: []
+      skills:
+      - category: Additional Distributed Systems & Cloud
+        matched:
+        - VMware vSphere
+        - virtual machines
+        jod_match_count: 0
+    - order: 9
+      render: true
+      text: Managed infrastructure budgets, coordinated contracted work, and mentored junior administrators through documented maintenance and incident routines.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Security & Compliance
+        matched: []
+      skills:
+      - category: Additional Security & Compliance
+        matched:
+        - incident management
+        jod_match_count: 0
+    - order: 10
+      render: true
+      text: Tuned resumable image-cache transfers between Linux backup hosts and SAN/NAS storage, adding integrity checks and exception reporting for operations.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        - SAN/NAS platforms
+        jod_match_count: 0
+  - order: 6
+    render: true
+    min_bullet_points: 3
+    max_bullet_points: 7
+    line_1:
+      company_name_text: Calder Ridge Research Institute | Fairmont, CO
+      position_name_text: Imaging Software Specialist
+      position_dates_text: May 2010 - Jul 2012
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Created Python, MATLAB, and R tools for synthetic CT and MR preprocessing, segmentation, intensity measurement, and three-dimensional anatomical visualization.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - MATLAB
+        - R
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - image-data processing
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Applied statistical methods to preclinical research datasets and prepared reproducible figures used in small-business research proposals.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - statistical analysis
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Worked with 3D Slicer, ITK-based libraries, and Python image-processing pipelines while documenting transformations, input assumptions, and quality checks.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Python
+        jod_match_count: 0
+      - category: Additional Data & Observability
+        matched:
+        - image-data processing
+        jod_match_count: 0
+    - order: 4
+      render: true
+      text: Supported experimental design, data collection, quantitative analysis, and technical reporting in collaboration with laboratory researchers.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - statistical analysis
+        - automated reporting
+        - CSV/JSON/HTML reporting
+        jod_match_count: 0
+    - order: 5
+      render: true
+      text: Helped build and maintain the studio's public Ruby on Rails website with version-controlled content and tested deployments.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - Ruby
+        - Ruby on Rails
+        jod_match_count: 0
+    - order: 6
+      render: true
+      text: Assisted with storage, network security, Windows systems, and backup operations needed by a small computational research environment.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Data & Observability
+        matched: []
+      skills:
+      - category: Additional Data & Observability
+        matched:
+        - SAN/NAS platforms
+        jod_match_count: 0
+      - category: Additional Security & Compliance
+        matched:
+        - disaster recovery
+        - business continuity
+        jod_match_count: 0
+    - order: 7
+      render: true
+      text: Supervised student researchers, reviewed analysis procedures, and taught reproducible file organization and basic scripting practices.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Automation & IaC
+        matched: []
+      skills:
+      - category: Additional Automation & IaC
+        matched:
+        - shell automation
+        jod_match_count: 0
+  - order: 7
+    render: true
+    min_bullet_points: 2
+    max_bullet_points: 3
+    line_1:
+      company_name_text: Redstone Valley University | Fairmont, CO
+      position_name_text: Web Services Assistant
+      position_dates_text: Sep 2008 - Apr 2010
+    line_2:
+      position_intro_text: ''
+    bullet_points:
+    - order: 1
+      render: true
+      text: Updated an internal information site with HTML, CSS, JavaScript, XML, and accessible image assets while keeping navigation and page templates consistent.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Languages & Frameworks
+        matched: []
+      skills:
+      - category: Languages & Frameworks
+        matched:
+        - JavaScript
+        jod_match_count: 0
+      - category: Platform & API Engineering
+        matched:
+        - XML
+        jod_match_count: 0
+      - category: Additional Languages & Frameworks
+        matched:
+        - CSS
+        - HTML
+        jod_match_count: 0
+    - order: 2
+      render: true
+      text: Worked with content owners and systems administrators to revise pages, resolve publishing defects, and improve findability for campus users.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Additional Languages & Frameworks
+        matched: []
+      skills:
+      - category: Additional Languages & Frameworks
+        matched:
+        - HTML
+        jod_match_count: 0
+    - order: 3
+      render: true
+      text: Reorganized document metadata and built a small search utility that improved retrieval across the department's approved intranet collection.
+      bullet_point_total_match_count: 0
+      categories:
+        assigned:
+        - Platform & API Engineering
+        matched: []
+      skills:
+      - category: Platform & API Engineering
+        matched:
+        - systems architecture
+        jod_match_count: 0
+      - category: Additional Platform & API Engineering
+        matched:
+        - web servers
+        jod_match_count: 0
+education:
+  render: true
+  header_text: Education
+  entries:
+  - order: 1
+    render: true
+    line_1:
+      institution_name_text: Redstone Valley University | Fairmont, CO
+    line_2:
+      degree_name_text: Bachelor of Science in Computational Physics & Applied Mathematics
+      degree_dates_text: 2004 - 2008
+    bullet_points:
+    - order: 1
+      render: true
+      text: Advanced coursework in numerical methods, applied statistics, algorithms, and mathematical modeling.
+    - order: 2
+      render: true
+      text: Served as president of the campus Strategy Games Society for three academic years.
+certifications:
+  render: true
+  header_text: Certifications
+  bullet_points:
+  - order: 1
+    render: true
+    text: Certified Infrastructure Security Engineer, Silverline Security Institute | February 2014
+  - order: 2
+    render: true
+    text: Cloud Platform Engineer, Arcstone Cloud Academy | November 2023
+  - order: 3
+    render: true
+    text: Applied AI Foundations Associate, Arcstone Cloud Academy | April 2026
+portfolio:
+  render: true
+  header_text: Portfolio
+  projects:
+  - order: 1
+    render: true
+    title_text: Human-Governed Workflow Studio
+    url: https://code.example.test/tessa-rowan/workflow-studio
+    description_text: A local Python workbench for researching reserved-domain job fixtures, managing SQLite-backed workflow state, and producing evidence-grounded resume variants through deterministic rendering, diagnostics, and human review gates. Tessa maintains its CI workflow with Python-version matrix tests, Ruff validation, release-metadata checks, packaging smoke tests, and a full offline pytest suite.

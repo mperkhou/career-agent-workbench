@@ -69,6 +69,7 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     assert actual == MANIFEST
     size_limits = {path: 20_000 for path in MANIFEST}
     size_limits[Path("profile/MP-MASTER-RESUME.txt")] = 40_000
+    size_limits[Path("profile/MASTER-RESUME.yml")] = 100_000
     assert all(
         0 < (SOURCE / path).stat().st_size < size_limits[path] for path in MANIFEST
     )
@@ -80,7 +81,7 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     resume_path = SOURCE / "profile/MASTER-RESUME.yml"
     resume = yaml.safe_load(resume_path.read_text("utf-8"))
     assert initialize_application_resume_object(resume_path)["basics"]["name"] == (
-        "Avery Demo"
+        "Tessa Rowan"
     )
     email_fields = [resume["basics"]["email"]]
     email_fields.extend(
@@ -167,20 +168,129 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     }
     assert placeholder_words.isdisjoint(visible_words)
 
+    required_sections = (
+        "header_top",
+        "professional_summary",
+        "core_technical_skills",
+        "professional_experience",
+        "education",
+        "certifications",
+        "portfolio",
+    )
+    assert resume["section_order"] == list(required_sections)
+    assert all(resume[section]["render"] is True for section in required_sections)
+    assert resume["basics"]["render"] is True
+    assert resume["source"] == {
+        "text_path": "profile/MP-MASTER-RESUME.txt",
+        "pdf_path": None,
+        "page_count": None,
+        "extraction_method": "g01_approved_public_text",
+    }
+    assert (
+        resume["basics"]["name"]
+        == resume["header_top"]["line_1_name_header_text"]
+        == "Tessa Rowan"
+    )
+    assert resume["basics"]["summary"] == resume["professional_summary"]["paragraph"]
+    assert resume["professional_summary"]["summary_note"] in source_text
+
+    source_skill_lines = [
+        line.removeprefix("- ")
+        for line in skills_text.splitlines()
+        if line.startswith("- ")
+    ]
+    source_skills = {
+        category: [item.strip() for item in values.split(",")]
+        for category, values in (line.split(": ", 1) for line in source_skill_lines)
+    }
+    skill_buckets = resume["core_technical_skills"]["bullet_points"]
+    assert len(skill_buckets) == 14
+    assert [bucket["order"] for bucket in skill_buckets] == list(range(1, 15))
+    assert [bucket["category"] for bucket in skill_buckets] == list(source_skills)
+    skill_inventory = {}
+    for bucket in skill_buckets:
+        category = bucket["category"]
+        items = bucket["items"]
+        combined = items["primary"] + items["additional"]
+        assert combined == source_skills[category]
+        assert not set(items["primary"]) & set(items["additional"])
+        assert set(items["match_terms"]).issubset(combined)
+        assert all(items["match_terms"].values())
+        assert bucket["jod_matched_items"] == []
+        skill_inventory[category] = set(combined)
+
+    jobs = resume["professional_experience"]["jobs"]
+    assert [job["order"] for job in jobs] == list(range(1, 8))
+    assert [len(job["bullet_points"]) for job in jobs] == list(role_bullets)
+    assert all(job["render"] is True for job in jobs)
+    assert sum(bool(job["line_2"]["position_intro_text"]) for job in jobs) == 1
+    assigned_category_links = 0
+    linked_category_groups = 0
+    linked_skill_values = 0
+    for job in jobs:
+        line_1 = job["line_1"]
+        assert line_1["company_name_text"] in source_text
+        assert line_1["position_name_text"] in source_text
+        assert line_1["position_dates_text"] in source_text
+        intro = job["line_2"]["position_intro_text"]
+        if intro:
+            assert f"Role Overview: {intro}" in source_text
+        assert [bullet["order"] for bullet in job["bullet_points"]] == list(
+            range(1, len(job["bullet_points"]) + 1)
+        )
+        for bullet in job["bullet_points"]:
+            assert bullet["render"] is True
+            assert f"- {bullet['text']}" in source_text
+            assert bullet["bullet_point_total_match_count"] == 0
+            assert bullet["categories"]["matched"] == []
+            assert set(bullet["categories"]["assigned"]).issubset(skill_inventory)
+            assigned_category_links += len(bullet["categories"]["assigned"])
+            for skill_group in bullet["skills"]:
+                category = skill_group["category"]
+                assert category in skill_inventory
+                assert set(skill_group["matched"]).issubset(skill_inventory[category])
+                assert skill_group["jod_match_count"] == 0
+                linked_category_groups += 1
+                linked_skill_values += len(skill_group["matched"])
+    assert assigned_category_links == 59
+    assert linked_category_groups == 146
+    assert linked_skill_values == 228
+    assert "job_opening_description" not in resume
+
+    education = resume["education"]["entries"]
+    assert len(education) == 1
+    assert len(education[0]["bullet_points"]) == 2
+    assert education[0]["line_1"]["institution_name_text"] in source_text
+    assert education[0]["line_2"]["degree_name_text"] in source_text
+    assert education[0]["line_2"]["degree_dates_text"] in source_text
+    assert all(
+        f"- {bullet['text']}" in source_text for bullet in education[0]["bullet_points"]
+    )
+    certification_bullets = resume["certifications"]["bullet_points"]
+    assert len(certification_bullets) == 3
+    assert all(f"- {bullet['text']}" in source_text for bullet in certification_bullets)
+    projects = resume["portfolio"]["projects"]
+    assert len(projects) == 1
+    project = projects[0]
+    assert (
+        f"{project['title_text']} | {project['url']} | "
+        f"{project['description_text']}" in source_text
+    )
+
     job = JobDetails.model_validate_json(
         (SOURCE / "jobs/demo-platform-engineer.json").read_text("utf-8")
     )
     assert job.job_id == "demo-platform-001"
-    assert job.company == "Nimbus Quay Example Labs"
-    assert job.title == "Demo Platform Engineer"
-    assert job.location == "Example City, ZZ"
+    assert job.company == "Rivermark Platform Services"
+    assert job.title == "Senior Platform Automation Engineer"
+    assert job.location == "Remote, United States"
     assert str(job.job_url).startswith("https://jobs.example.test/")
     assert job.workplace_type == "remote"
     assert job.employment_type == "full_time"
     assert job.seniority_level == "mid_senior"
     assert "Python" in (job.description or "")
     blacklist = (SOURCE / ".blacklist").read_text("utf-8").strip()
-    assert blacklist == "Obsidian Kite Demo Works"
+    assert blacklist == "Granite Harbor Consulting"
     assert blacklist != job.company
     readme = (SOURCE / "README.md").read_text("utf-8")
     assert "fictional" in readme.casefold()
@@ -200,15 +310,19 @@ def test_factory_materializes_one_governed_demo_and_flask_row(tmp_path: Path) ->
     assert len(rows) == 1
     record = rows[0]
     assert record.job_id == "demo-platform-001"
-    assert record.company == "Nimbus Quay Example Labs"
-    assert record.job_title == "Demo Platform Engineer"
-    assert record.job_description and "Python services" in record.job_description
+    assert record.company == "Rivermark Platform Services"
+    assert record.job_title == "Senior Platform Automation Engineer"
+    assert record.job_description and "Python automation services" in (
+        record.job_description
+    )
     assert record.prompt_job_description
     assert record.selected_resume_variant == "v1"
     assert record.resume_variant_selection_mode == "auto"
     assert record.application_resume is not None
     assert record.cover_letter is not None
     assert record.cover_letter["requires_human_review"] is True
+    assert record.cover_letter["company"] == "Rivermark Platform Services"
+    assert "Tessa Rowan" in record.cover_letter["paragraphs"][0]
     variants = store.list_resume_variants(record.job_id)
     assert len(variants) == 1
     assert variants[0].variant_key == "v1"
@@ -228,14 +342,14 @@ def test_factory_materializes_one_governed_demo_and_flask_row(tmp_path: Path) ->
         record.cover_letter
     )
     assert generated["resume-v1.html"] == variants[0].resume_html
-    assert "Avery Demo" in generated["resume-v1.html"]
-    assert "Cedar &amp; Comet Example Cooperative" in generated["resume-v1.html"]
+    assert "Tessa Rowan" in generated["resume-v1.html"]
+    assert "Alder Creek Medical Group" in generated["resume-v1.html"]
 
     app = create_app(resolved, project_root=ROOT)
     response = app.test_client().get("/")
     assert response.status_code == 200
     assert b"demo-platform-001" in response.data
-    assert b"Nimbus Quay Example Labs" in response.data
+    assert b"Rivermark Platform Services" in response.data
     assert _source_digests() == before
 
 

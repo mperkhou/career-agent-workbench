@@ -32,7 +32,7 @@ from career_agent_workbench.models import JobDetails
 from career_agent_workbench.resume_rendering import render_resume_html_from_mapping
 
 _ERROR = "Demo workspace could not be created."
-_FIXED_TIME = datetime(2042, 4, 12, 12, 0, tzinfo=UTC)
+_FIXED_TIME = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 _EXPECTED_SOURCE_FILES = frozenset(
     {
         Path("README.md"),
@@ -83,8 +83,8 @@ def _validate_source(source: Path) -> JobDetails:
         raise DemoWorkspaceError(_ERROR) from None
     if (
         job.job_id != "demo-platform-001"
-        or job.company != "Nimbus Quay Example Labs"
-        or job.title != "Demo Platform Engineer"
+        or job.company != "Rivermark Platform Services"
+        or job.title != "Senior Platform Automation Engineer"
         or job.description is None
     ):
         raise DemoWorkspaceError(_ERROR)
@@ -133,9 +133,10 @@ def _resume_for_job(runtime: RuntimeConfig, job: JobDetails) -> dict[str, object
     description = create_job_opening_description_object(
         trimmed_job_description=prompt_jod,
         requirements_response=[
-            "Build reliable Python services with focused tests.",
-            "Maintain SQLite-backed workflow state and useful observability.",
-            "Document human review checkpoints and operational runbooks.",
+            "Build reliable Python automation services with focused tests.",
+            "Maintain Ansible and AWX workflows for shared platforms.",
+            "Improve OpenSearch, Grafana, and Prometheus observability.",
+            "Document operational runbooks and human review checkpoints.",
         ],
     )
     return attach_job_opening_description_object(
@@ -151,8 +152,8 @@ def _cover_letter(job: JobDetails) -> dict[str, object]:
         "company": job.company,
         "title": job.title,
         "paragraphs": [
-            "Avery Demo is interested in the fictional platform role.",
-            "The supplied demo history supports Python, SQLite, testing, and observability work.",
+            "Tessa Rowan is interested in the Senior Platform Automation Engineer role at Rivermark Platform Services.",
+            "The supplied public resume supports Python, Ansible, AWX, testing, cloud infrastructure, and observability work.",
         ],
         "requires_human_review": True,
     }
@@ -241,7 +242,7 @@ def create_demo_workspace(source: Path, workspace: Path) -> RuntimeConfig:
             job.job_id,
             ResumeVariantWrite(
                 variant_key="v1",
-                variant_label="Fictional demo v1",
+                variant_label="Tessa Rowan public demo v1",
                 source="fictional_demo",
                 application_resume_yaml=resume_yaml,
                 resume_html=resume_html,

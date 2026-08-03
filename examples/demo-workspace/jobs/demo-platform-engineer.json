@@ -1,13 +1,13 @@
 {
   "job_id": "demo-platform-001",
-  "title": "Demo Platform Engineer",
-  "company": "Nimbus Quay Example Labs",
-  "location": "Example City, ZZ",
-  "listed_at": "2042-04-12",
-  "job_url": "https://jobs.example.test/demo-platform-engineer",
+  "title": "Senior Platform Automation Engineer",
+  "company": "Rivermark Platform Services",
+  "location": "Remote, United States",
+  "listed_at": "2026-07-10",
+  "job_url": "https://jobs.example.test/rivermark-platform-automation-engineer",
   "workplace_type": "remote",
   "source": "fictional_demo_public",
-  "description": "Nimbus Quay Example Labs seeks a Demo Platform Engineer to build reliable Python services, maintain SQLite-backed workflow state, add focused tests, and create useful observability for offline fictional systems. The role documents human review checkpoints and collaborates on clear operational runbooks.",
+  "description": "Rivermark Platform Services seeks a Senior Platform Automation Engineer to build reliable Python automation services, maintain Ansible and AWX workflows, improve OpenSearch, Grafana, and Prometheus observability, and support cloud infrastructure. The role writes focused tests, documents operational runbooks, and preserves explicit human review before production changes.",
   "seniority_level": "mid_senior",
   "employment_type": "full_time"
 }

@@ -9,6 +9,11 @@ from pathlib import Path
 from flask import Flask
 
 from career_agent_workbench import _archived_flask_source as archived
+from career_agent_workbench.application_state import (
+    ApplicationStateError,
+    ApplicationStateNotInitializedError,
+    ApplicationStateStore,
+)
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
@@ -75,6 +80,16 @@ def create_app(runtime: RuntimeConfig, *, project_root: Path | None = None) -> F
     download_dir = paths.require(WorkspaceMember.DOWNLOAD_DIR)
     bound_root = _project_root(project_root)
     template_path = _packaged_resume_template()
+    state_store = ApplicationStateStore(paths)
+    try:
+        state_store.list_applications(limit=1)
+    except ApplicationStateNotInitializedError:
+        try:
+            state_store.initialize()
+        except ApplicationStateError:
+            raise ValueError("Web application database is unavailable.") from None
+    except ApplicationStateError:
+        raise ValueError("Web application database is unavailable.") from None
     archived.configure_runtime_boundaries(
         project_root=bound_root,
         process_env=_runtime_process_env(runtime),
@@ -86,6 +101,7 @@ def create_app(runtime: RuntimeConfig, *, project_root: Path | None = None) -> F
         resume_template_path=template_path,
     )
     app.extensions["career_agent_workbench.runtime"] = runtime
+    app.extensions["career_agent_workbench.application_state"] = state_store
     return app
 
 

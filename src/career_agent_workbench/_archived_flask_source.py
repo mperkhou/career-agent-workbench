@@ -17,7 +17,7 @@ from html import escape as html_escape
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import yaml
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
@@ -27,7 +27,14 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
 from career_agent_workbench.ats import AtsProxyScore, calculate_ats_proxy_score
-from career_agent_workbench.config import load_settings
+from career_agent_workbench.application_state import (
+    ApplicationMetadata,
+    ApplicationStateError,
+    ApplicationStateStore,
+    AtsFields,
+    ResumeVariantWrite,
+)
+from career_agent_workbench.config import WorkspacePaths, load_settings
 from career_agent_workbench.errors import CareerAgentWorkbenchError
 from career_agent_workbench.generic_job_scraper import (
     extract_generic_job_details_from_html,
@@ -237,11 +244,53 @@ def configure_runtime_boundaries(
 
 
 def connect_database(database_path: Path) -> sqlite3.Connection:
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path)
+    encoded = quote(str(database_path), safe="/")
+    connection = sqlite3.connect(
+        f"file:{encoded}?mode=rw",
+        uri=True,
+        timeout=5.0,
+    )
     connection.row_factory = sqlite3.Row
-    init_database(connection)
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     return connection
+
+
+def _state_store(database_path: Path) -> ApplicationStateStore:
+    return ApplicationStateStore(WorkspacePaths(database=database_path))
+
+
+def _state_value(operation: Callable[[], Any]) -> Any:
+    try:
+        return operation()
+    except ApplicationStateError:
+        raise ValueError("Application workflow state could not be updated.") from None
+
+
+def _ats_fields(
+    score: AtsProxyScore | None,
+    *,
+    diagnostics: Mapping[str, Any] | None = None,
+) -> AtsFields:
+    if score is None:
+        return AtsFields(diagnostics=diagnostics)
+    return AtsFields(
+        score=score.overall_score,
+        parsing_score=score.parsing_score,
+        keyword_score=score.keyword_match_score,
+        semantic_score=score.semantic_match_score,
+        formatting_risk=score.formatting_risk,
+        missing_terms=_format_missing_terms(score),
+        diagnostics=diagnostics,
+    )
+
+
+def _optional_mapping(value: Any | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("Application workflow metadata is invalid.")
+    return dict(value)
 
 
 def init_database(connection: sqlite3.Connection) -> None:
@@ -664,220 +713,73 @@ def upsert_application_artifact(
         if resume_path is not None and resume_path.is_file()
         else None
     )
-    resume_updated_at = _artifact_timestamp(resume_path) if resume_content is not None else None
     cover_letter_content = (
         cover_letter_path.read_bytes()
         if cover_letter_path is not None and cover_letter_path.is_file()
-        else None
-    )
-    cover_letter_updated_at = (
-        _artifact_timestamp(cover_letter_path)
-        if cover_letter_content is not None
         else None
     )
     ats_score = _calculate_ats_score(
         resume_content=resume_content,
         job_description=prompt_job_description or job_description,
     )
-    with connect_database(database_path) as connection:
-        connection.execute(
-            """
-            INSERT INTO applications (
-                job_id, company, job_title, linkedin_url, job_description,
-                prompt_job_description, resume_filename, resume_content, resume_mime_type,
-                source_resume_path, resume_updated_at, cover_letter_filename,
-                cover_letter_content, cover_letter_mime_type, source_cover_letter_path,
-                cover_letter_updated_at, date_matched, date_posted, experience_level,
-                ats_score, ats_parsing_score, ats_keyword_score, ats_semantic_score,
-                ats_formatting_risk, ats_missing_terms, ats_updated_at, applied_to,
-                date_applied, imported_at, updated_at
+
+    def persist() -> None:
+        store = _state_store(database_path)
+        host = (urlsplit(linkedin_url).hostname or "").casefold()
+        source = "linkedin" if host.endswith("linkedin.com") else "generic"
+        record = store.upsert_application(
+            ApplicationMetadata(
+                job_id=str(job_id),
+                company=company,
+                job_title=job_title,
+                job_url=linkedin_url,
+                source=source,
+                date_matched=date_matched,
+                date_posted=date_posted,
+                experience_level=experience_level or None,
             )
-            VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?
-            )
-            ON CONFLICT(job_id) DO UPDATE SET
-                company = excluded.company,
-                job_title = excluded.job_title,
-                linkedin_url = excluded.linkedin_url,
-                job_description = COALESCE(
-                    excluded.job_description,
-                    applications.job_description
-                ),
-                prompt_job_description = COALESCE(
-                    excluded.prompt_job_description,
-                    applications.prompt_job_description
-                ),
-                resume_filename = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.resume_filename
-                    WHEN excluded.resume_filename != '' THEN excluded.resume_filename
-                    ELSE applications.resume_filename
-                END,
-                resume_content = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.resume_content
-                    ELSE COALESCE(excluded.resume_content, applications.resume_content)
-                END,
-                resume_mime_type = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.resume_mime_type
-                    WHEN excluded.resume_content IS NOT NULL THEN excluded.resume_mime_type
-                    ELSE applications.resume_mime_type
-                END,
-                source_resume_path = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.source_resume_path
-                    WHEN excluded.source_resume_path != '' THEN excluded.source_resume_path
-                    ELSE applications.source_resume_path
-                END,
-                resume_updated_at = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.resume_updated_at
-                    ELSE COALESCE(
-                        excluded.resume_updated_at,
-                        applications.resume_updated_at
-                    )
-                END,
-                cover_letter_filename = CASE
-                    WHEN COALESCE(NULLIF(applications.cover_letter_object, ''), '') != ''
-                    THEN applications.cover_letter_filename
-                    WHEN excluded.cover_letter_filename != '' THEN excluded.cover_letter_filename
-                    ELSE applications.cover_letter_filename
-                END,
-                cover_letter_content = CASE
-                    WHEN COALESCE(NULLIF(applications.cover_letter_object, ''), '') != ''
-                    THEN applications.cover_letter_content
-                    ELSE COALESCE(
-                        excluded.cover_letter_content,
-                        applications.cover_letter_content
-                    )
-                END,
-                cover_letter_mime_type = CASE
-                    WHEN COALESCE(NULLIF(applications.cover_letter_object, ''), '') != ''
-                    THEN applications.cover_letter_mime_type
-                    WHEN excluded.cover_letter_content IS NOT NULL
-                    THEN excluded.cover_letter_mime_type
-                    ELSE applications.cover_letter_mime_type
-                END,
-                source_cover_letter_path = CASE
-                    WHEN COALESCE(NULLIF(applications.cover_letter_object, ''), '') != ''
-                    THEN applications.source_cover_letter_path
-                    WHEN excluded.source_cover_letter_path != ''
-                    THEN excluded.source_cover_letter_path
-                    ELSE applications.source_cover_letter_path
-                END,
-                cover_letter_updated_at = CASE
-                    WHEN COALESCE(NULLIF(applications.cover_letter_object, ''), '') != ''
-                    THEN applications.cover_letter_updated_at
-                    ELSE COALESCE(
-                        excluded.cover_letter_updated_at,
-                        applications.cover_letter_updated_at
-                    )
-                END,
-                date_matched = COALESCE(
-                    NULLIF(applications.date_matched, ''),
-                    excluded.date_matched
-                ),
-                date_posted = COALESCE(
-                    NULLIF(excluded.date_posted, ''),
-                    applications.date_posted
-                ),
-                experience_level = COALESCE(
-                    NULLIF(excluded.experience_level, ''),
-                    applications.experience_level
-                ),
-                ats_score = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_score
-                    ELSE COALESCE(excluded.ats_score, applications.ats_score)
-                END,
-                ats_parsing_score = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_parsing_score
-                    ELSE COALESCE(
-                        excluded.ats_parsing_score,
-                        applications.ats_parsing_score
-                    )
-                END,
-                ats_keyword_score = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_keyword_score
-                    ELSE COALESCE(
-                        excluded.ats_keyword_score,
-                        applications.ats_keyword_score
-                    )
-                END,
-                ats_semantic_score = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_semantic_score
-                    ELSE COALESCE(
-                        excluded.ats_semantic_score,
-                        applications.ats_semantic_score
-                    )
-                END,
-                ats_formatting_risk = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_formatting_risk
-                    ELSE COALESCE(
-                        excluded.ats_formatting_risk,
-                        applications.ats_formatting_risk
-                    )
-                END,
-                ats_missing_terms = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_missing_terms
-                    ELSE COALESCE(
-                        excluded.ats_missing_terms,
-                        applications.ats_missing_terms
-                    )
-                END,
-                ats_updated_at = CASE
-                    WHEN COALESCE(NULLIF(applications.application_resume_object, ''), '') != ''
-                    THEN applications.ats_updated_at
-                    ELSE COALESCE(excluded.ats_updated_at, applications.ats_updated_at)
-                END,
-                applied_to = CASE
-                    WHEN applications.applied_to != 'No' THEN applications.applied_to
-                    ELSE excluded.applied_to
-                END,
-                date_applied = COALESCE(applications.date_applied, excluded.date_applied),
-                updated_at = excluded.updated_at
-            """,
-            (
-                str(job_id),
-                company,
-                job_title,
-                linkedin_url,
-                job_description,
-                prompt_job_description,
-                resume_path.name if resume_path is not None else "",
-                resume_content,
-                "application/pdf",
-                str(resume_path) if resume_path is not None else "",
-                resume_updated_at,
-                cover_letter_path.name if cover_letter_path is not None else "",
-                cover_letter_content,
-                "application/pdf",
-                str(cover_letter_path) if cover_letter_path is not None else "",
-                cover_letter_updated_at,
-                date_matched,
-                date_posted,
-                experience_level,
-                ats_score.overall_score if ats_score is not None else None,
-                ats_score.parsing_score if ats_score is not None else None,
-                ats_score.keyword_match_score if ats_score is not None else None,
-                ats_score.semantic_match_score if ats_score is not None else None,
-                ats_score.formatting_risk if ats_score is not None else None,
-                _format_missing_terms(ats_score) if ats_score is not None else None,
-                now if ats_score is not None else None,
-                applied_to,
-                date_applied,
-                now,
-                now,
-            ),
         )
-        connection.commit()
+        if job_description is not None or prompt_job_description is not None:
+            record = store.store_jod(
+                str(job_id),
+                source_text=(
+                    job_description
+                    if job_description is not None
+                    else record.job_description or ""
+                ),
+                prompt_text=(
+                    prompt_job_description
+                    if prompt_job_description is not None
+                    else record.prompt_job_description or ""
+                ),
+            )
+        resume_payload = resume_content if record.application_resume is None else None
+        cover_payload = cover_letter_content if record.cover_letter is None else None
+        if resume_payload is not None or cover_payload is not None:
+            record = store.store_application_artifacts(
+                str(job_id),
+                resume_pdf=resume_payload,
+                cover_letter_pdf=cover_payload,
+                source_resume_path=(
+                    str(resume_path) if resume_payload is not None and resume_path else ""
+                ),
+                source_cover_letter_path=(
+                    str(cover_letter_path)
+                    if cover_payload is not None and cover_letter_path
+                    else ""
+                ),
+                ats=_ats_fields(ats_score) if ats_score is not None else None,
+            )
+        if record.applied_to == "No" and (
+            applied_to != "No" or date_applied is not None
+        ):
+            store.update_application_status(
+                str(job_id),
+                applied_to=applied_to,
+                date_applied=date_applied,
+            )
+
+    _state_value(persist)
 
 
 def add_linkedin_application_from_url(
@@ -975,110 +877,49 @@ def store_application_resume_first_draft(
     resume_html_path: Path | None = None,
     resume_pdf_path: Path | None = None,
 ) -> None:
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT job_id, job_title, prompt_job_description, job_description
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
+    _parse_application_resume_yaml(application_resume_object)
 
+    def persist() -> None:
+        store = _state_store(database_path)
+        row = store.get_application(job_id)
         ats_score = _calculate_ats_score(
             resume_content=resume_pdf,
-            job_description=row["prompt_job_description"] or row["job_description"],
+            job_description=row.prompt_job_description or row.job_description,
         )
-        connection.execute(
-            """
-            UPDATE applications
-            SET application_resume_object = ?,
-                application_resume_updated_at = ?,
-                resume_html_filename = ?,
-                resume_html_content = ?,
-                resume_html_mime_type = 'text/html; charset=utf-8',
-                source_resume_html_path = ?,
-                resume_html_updated_at = ?,
-                resume_filename = ?,
-                resume_content = ?,
-                resume_mime_type = 'application/pdf',
-                source_resume_path = ?,
-                resume_updated_at = ?,
-                ats_score = ?,
-                ats_parsing_score = ?,
-                ats_keyword_score = ?,
-                ats_semantic_score = ?,
-                ats_formatting_risk = ?,
-                ats_missing_terms = ?,
-                ats_updated_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                application_resume_object,
-                now,
-                (
-                    resume_html_path.name
-                    if resume_html_path is not None
-                    else _resume_html_filename(row)
+        store.upsert_resume_variant(
+            job_id,
+            ResumeVariantWrite(
+                variant_key=DEFAULT_RESUME_VARIANT,
+                variant_label="Draft v1",
+                source="first_draft",
+                application_resume_yaml=application_resume_object,
+                resume_html=resume_html,
+                resume_pdf=resume_pdf,
+                source_resume_html_path=(
+                    str(resume_html_path) if resume_html_path is not None else ""
                 ),
-                resume_html,
-                str(resume_html_path) if resume_html_path is not None else "",
-                now,
-                resume_pdf_path.name if resume_pdf_path is not None else _resume_pdf_filename(row),
-                resume_pdf,
-                str(resume_pdf_path) if resume_pdf_path is not None else "",
-                now,
-                ats_score.overall_score if ats_score is not None else None,
-                ats_score.parsing_score if ats_score is not None else None,
-                ats_score.keyword_match_score if ats_score is not None else None,
-                ats_score.semantic_match_score if ats_score is not None else None,
-                ats_score.formatting_risk if ats_score is not None else None,
-                _format_missing_terms(ats_score) if ats_score is not None else None,
-                now if ats_score is not None else None,
-                now,
-                job_id,
+                source_resume_path=(
+                    str(resume_pdf_path) if resume_pdf_path is not None else ""
+                ),
+                ats=_ats_fields(ats_score),
             ),
         )
-        _upsert_application_resume_variant(
-            connection=connection,
-            row=row,
-            variant_key=DEFAULT_RESUME_VARIANT,
-            variant_label="Draft v1",
-            source="first_draft",
-            parent_variant_key=None,
-            application_resume_object=application_resume_object,
-            resume_html=resume_html,
-            resume_pdf=resume_pdf,
-            ats_score=ats_score,
-            resume_html_filename=(
-                resume_html_path.name
-                if resume_html_path is not None
-                else _resume_html_filename(row)
-            ),
-            resume_filename=(
-                resume_pdf_path.name if resume_pdf_path is not None else _resume_pdf_filename(row)
-            ),
-            source_resume_html_path=str(resume_html_path) if resume_html_path is not None else "",
-            source_resume_path=str(resume_pdf_path) if resume_pdf_path is not None else "",
-        )
-        _apply_resume_variant_default_precedence(
-            connection,
-            job_ids=[job_id],
-            force=True,
-        )
-        connection.commit()
+
+    _state_value(persist)
 
 
 def backfill_application_resume_v1_variants(database_path: Path) -> int:
+    before = 0
+    try:
+        with connect_database(database_path) as connection:
+            before = _resume_variant_count(
+                connection, variant_key=DEFAULT_RESUME_VARIANT
+            )
+    except sqlite3.Error:
+        pass
+    _state_value(lambda: _state_store(database_path).initialize())
     with connect_database(database_path) as connection:
-        before = _resume_variant_count(connection, variant_key=DEFAULT_RESUME_VARIANT)
-        _backfill_v1_resume_variants(connection)
         after = _resume_variant_count(connection, variant_key=DEFAULT_RESUME_VARIANT)
-        connection.commit()
     return max(0, after - before)
 
 
@@ -1110,62 +951,50 @@ def store_application_resume_variant(
     selection_mode: str | None = None,
 ) -> AtsProxyScore | None:
     _parse_application_resume_yaml(application_resume_object)
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT *
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
+
+    def persist() -> AtsProxyScore | None:
+        nonlocal ats_score
+        store = _state_store(database_path)
+        row = store.get_application(job_id)
         if ats_score is None:
             ats_score = _calculate_ats_score(
                 resume_content=resume_pdf,
-                job_description=row["prompt_job_description"] or row["job_description"],
+                job_description=row.prompt_job_description or row.job_description,
             )
-        _upsert_application_resume_variant(
-            connection=connection,
-            row=row,
-            variant_key=variant_key,
-            variant_label=variant_label,
-            source=source,
-            parent_variant_key=parent_variant_key,
-            application_resume_object=application_resume_object,
-            resume_html=resume_html,
-            resume_pdf=resume_pdf,
-            ats_score=ats_score,
-            resume_html_filename=resume_html_filename,
-            resume_filename=resume_filename,
-            source_resume_html_path=source_resume_html_path,
-            source_resume_path=source_resume_path,
-            ats_diagnostics=ats_diagnostics,
-            evidence_packet=evidence_packet,
-            external_critique=external_critique,
-            critique_prompt=critique_prompt,
-            critique_response=critique_response,
-            critique=critique,
-            validation=validation,
-            model_metadata=model_metadata,
+        store.upsert_resume_variant(
+            job_id,
+            ResumeVariantWrite(
+                variant_key=variant_key,
+                variant_label=variant_label,
+                source=source,
+                parent_variant_key=parent_variant_key,
+                application_resume_yaml=application_resume_object,
+                resume_html=resume_html,
+                resume_pdf=resume_pdf,
+                source_resume_html_path=source_resume_html_path,
+                source_resume_path=source_resume_path,
+                ats=_ats_fields(
+                    ats_score,
+                    diagnostics=_optional_mapping(ats_diagnostics),
+                ),
+                ats_diagnostics=_optional_mapping(ats_diagnostics),
+                evidence_packet=_optional_mapping(evidence_packet),
+                external_critique=_optional_mapping(external_critique),
+                critique_prompt=critique_prompt,
+                critique_response=critique_response,
+                critique=_optional_mapping(critique),
+                validation=_optional_mapping(validation),
+                model_metadata=_optional_mapping(model_metadata),
+            ),
         )
         if select_after_store:
-            _select_application_resume_variant_on_connection(
-                connection=connection,
-                job_id=job_id,
-                variant_key=variant_key,
-                selection_mode=selection_mode
-                or str(row["resume_variant_selection_mode"] or AUTO_RESUME_VARIANT_SELECTION_MODE),
-            )
-        else:
-            _apply_resume_variant_default_precedence(
-                connection,
-                job_ids=[job_id],
-                force=True,
-            )
-        connection.commit()
-    return ats_score
+            if selection_mode == AUTO_RESUME_VARIANT_SELECTION_MODE:
+                store.reset_resume_variant_selection(job_id)
+            else:
+                store.select_resume_variant(job_id, variant_key)
+        return ats_score
+
+    return _state_value(persist)
 
 
 def fetch_active_resume_refinement_job_ids(database_path: Path) -> list[str]:
@@ -1357,15 +1186,18 @@ def select_application_resume_variant(
     job_id: str,
     variant_key: str,
 ) -> dict[str, Any]:
-    with connect_database(database_path) as connection:
-        selected = _select_application_resume_variant_on_connection(
-            connection=connection,
-            job_id=job_id,
-            variant_key=variant_key,
-            selection_mode=MANUAL_RESUME_VARIANT_SELECTION_MODE,
-        )
-        connection.commit()
-    return selected
+    selected = _state_value(
+        lambda: _state_store(database_path).select_resume_variant(job_id, variant_key)
+    )
+    return {
+        "variant_key": variant_key,
+        "variant_label": _resume_variant_label(
+            variant_key,
+            selected.selected_variant.variant_label
+            if selected.selected_variant is not None
+            else variant_key,
+        ),
+    }
 
 
 def _select_application_resume_variant_on_connection(
@@ -1784,80 +1616,30 @@ def save_application_resume_edit(
     template_path: Path | None = None,
     backup_current: bool = True,
 ) -> AtsProxyScore | None:
+    store = _state_store(database_path)
+    snapshot = _state_value(lambda: store.get_workflow_snapshot(job_id))
+    row = snapshot.application
     resume = _parse_application_resume_yaml(application_resume_object)
     resume_html = render_resume_html_from_mapping(
         resume=resume,
         template_path=_resume_template_path(template_path),
     )
     resume_pdf = render_resume_pdf_from_html(resume_html)
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT *
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
-        ats_score = _calculate_ats_score(
-            resume_content=resume_pdf,
-            job_description=row["prompt_job_description"] or row["job_description"],
+    ats_score = _calculate_ats_score(
+        resume_content=resume_pdf,
+        job_description=row.prompt_job_description or row.job_description,
+    )
+    _state_value(
+        lambda: store.store_active_resume_if_revision(
+            job_id,
+            yaml_text=application_resume_object,
+            resume_html=resume_html,
+            resume_pdf=resume_pdf,
+            ats=_ats_fields(ats_score) if ats_score is not None else None,
+            expected_revision=snapshot.edit_revision or snapshot.revision,
+            backup_current=backup_current,
         )
-        connection.execute(
-            """
-            UPDATE applications
-            SET application_resume_backup_object = ?,
-                application_resume_backup_created_at = ?,
-                application_resume_object = ?,
-                application_resume_updated_at = ?,
-                resume_html_filename = ?,
-                resume_html_content = ?,
-                resume_html_mime_type = 'text/html; charset=utf-8',
-                source_resume_html_path = '',
-                resume_html_updated_at = ?,
-                resume_filename = ?,
-                resume_content = ?,
-                resume_mime_type = 'application/pdf',
-                source_resume_path = '',
-                resume_updated_at = ?,
-                ats_score = ?,
-                ats_parsing_score = ?,
-                ats_keyword_score = ?,
-                ats_semantic_score = ?,
-                ats_formatting_risk = ?,
-                ats_missing_terms = ?,
-                ats_updated_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                row["application_resume_object"] if backup_current else row[
-                    "application_resume_backup_object"
-                ],
-                now if backup_current else row["application_resume_backup_created_at"],
-                application_resume_object,
-                now,
-                _resume_html_filename(row),
-                resume_html,
-                now,
-                _resume_pdf_filename(row),
-                resume_pdf,
-                now,
-                ats_score.overall_score if ats_score is not None else None,
-                ats_score.parsing_score if ats_score is not None else None,
-                ats_score.keyword_match_score if ats_score is not None else None,
-                ats_score.semantic_match_score if ats_score is not None else None,
-                ats_score.formatting_risk if ats_score is not None else None,
-                _format_missing_terms(ats_score) if ats_score is not None else None,
-                now if ats_score is not None else None,
-                now,
-                job_id,
-            ),
-        )
-        connection.commit()
+    )
     return ats_score
 
 
@@ -1867,18 +1649,11 @@ def sync_application_resume_to_draft(
     job_id: str,
     template_path: Path | None = None,
 ) -> AtsProxyScore | None:
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT *
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
-        application_resume_object = str(row["application_resume_object"] or "").strip()
+    def persist() -> AtsProxyScore | None:
+        store = _state_store(database_path)
+        snapshot = store.get_workflow_snapshot(job_id)
+        row = snapshot.application
+        application_resume_object = str(snapshot.active_resume_yaml or "").strip()
         if not application_resume_object:
             raise ValueError("Application resume object was not found.")
 
@@ -1890,52 +1665,20 @@ def sync_application_resume_to_draft(
         resume_pdf = render_resume_pdf_from_html(resume_html)
         ats_score = _calculate_ats_score(
             resume_content=resume_pdf,
-            job_description=row["prompt_job_description"] or row["job_description"],
+            job_description=row.prompt_job_description or row.job_description,
         )
-        now = datetime.now(UTC).isoformat(timespec="seconds")
-        connection.execute(
-            """
-            UPDATE applications
-            SET resume_html_filename = ?,
-                resume_html_content = ?,
-                resume_html_mime_type = 'text/html; charset=utf-8',
-                source_resume_html_path = '',
-                resume_html_updated_at = ?,
-                resume_filename = ?,
-                resume_content = ?,
-                resume_mime_type = 'application/pdf',
-                source_resume_path = '',
-                resume_updated_at = ?,
-                ats_score = ?,
-                ats_parsing_score = ?,
-                ats_keyword_score = ?,
-                ats_semantic_score = ?,
-                ats_formatting_risk = ?,
-                ats_missing_terms = ?,
-                ats_updated_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                _resume_html_filename(row),
-                resume_html,
-                now,
-                _resume_pdf_filename(row),
-                resume_pdf,
-                now,
-                ats_score.overall_score if ats_score is not None else None,
-                ats_score.parsing_score if ats_score is not None else None,
-                ats_score.keyword_match_score if ats_score is not None else None,
-                ats_score.semantic_match_score if ats_score is not None else None,
-                ats_score.formatting_risk if ats_score is not None else None,
-                _format_missing_terms(ats_score) if ats_score is not None else None,
-                now if ats_score is not None else None,
-                now,
-                job_id,
-            ),
+        store.store_active_resume_if_revision(
+            job_id,
+            yaml_text=application_resume_object,
+            resume_html=resume_html,
+            resume_pdf=resume_pdf,
+            ats=_ats_fields(ats_score) if ats_score is not None else None,
+            expected_revision=snapshot.edit_revision or snapshot.revision,
+            backup_current=False,
         )
-        connection.commit()
-    return ats_score
+        return ats_score
+
+    return _state_value(persist)
 
 
 def revert_application_resume_edit(
@@ -1944,27 +1687,46 @@ def revert_application_resume_edit(
     job_id: str,
     template_path: Path | None = None,
 ) -> AtsProxyScore | None:
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT application_resume_backup_object
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-    if row is None:
-        raise ValueError(f"Application row was not found for job_id={job_id}.")
-    backup_object = str(row["application_resume_backup_object"] or "").strip()
-    if not backup_object:
-        raise ValueError("No manual resume backup is available for this application.")
-    return save_application_resume_edit(
-        database_path=database_path,
-        job_id=job_id,
-        application_resume_object=backup_object,
-        template_path=template_path,
-        backup_current=True,
-    )
+    def persist() -> AtsProxyScore | None:
+        store = _state_store(database_path)
+        snapshot = store.get_workflow_snapshot(job_id)
+        with connect_database(database_path) as connection:
+            row = connection.execute(
+                """
+                SELECT aro_backup_yaml
+                FROM applications
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        backup_object = str(row["aro_backup_yaml"] if row is not None else "").strip()
+        if not backup_object:
+            raise ValueError(
+                "No manual resume backup is available for this application."
+            )
+        resume = _parse_application_resume_yaml(backup_object)
+        resume_html = render_resume_html_from_mapping(
+            resume=resume,
+            template_path=_resume_template_path(template_path),
+        )
+        resume_pdf = render_resume_pdf_from_html(resume_html)
+        application = snapshot.application
+        ats_score = _calculate_ats_score(
+            resume_content=resume_pdf,
+            job_description=(
+                application.prompt_job_description or application.job_description
+            ),
+        )
+        store.revert_active_resume_if_revision(
+            job_id,
+            resume_html=resume_html,
+            resume_pdf=resume_pdf,
+            ats=_ats_fields(ats_score) if ats_score is not None else None,
+            expected_revision=snapshot.edit_revision or snapshot.revision,
+        )
+        return ats_score
+
+    return _state_value(persist)
 
 
 def save_cover_letter_edit(
@@ -1986,42 +1748,14 @@ def save_cover_letter_edit(
         }
     )
     cover_letter_pdf = render_cover_letter_pdf_from_clo_html(sanitized_html)
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT *
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
-        connection.execute(
-            """
-            UPDATE applications
-            SET cover_letter_object = ?,
-                cover_letter_object_updated_at = ?,
-                cover_letter_filename = ?,
-                cover_letter_content = ?,
-                cover_letter_mime_type = 'application/pdf',
-                source_cover_letter_path = '',
-                cover_letter_updated_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                cover_letter_object,
-                now,
-                _cover_letter_pdf_filename(row),
-                cover_letter_pdf,
-                now,
-                now,
-                job_id,
-            ),
+    parsed = _parse_cover_letter_object(cover_letter_object)
+    _state_value(
+        lambda: _state_store(database_path).store_clo(
+            job_id,
+            value=parsed,
+            pdf_content=cover_letter_pdf,
         )
-        connection.commit()
+    )
 
 
 def save_description_edit(
@@ -2033,54 +1767,22 @@ def save_description_edit(
 ) -> AtsProxyScore | None:
     parsed_description = job_description.strip() or None
     prompt_description = prompt_job_description.strip() or None
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        row = connection.execute(
-            """
-            SELECT resume_content
-            FROM applications
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Application row was not found for job_id={job_id}.")
-
+    def persist() -> AtsProxyScore | None:
+        store = _state_store(database_path)
+        row = store.get_application(job_id)
         score = _calculate_ats_score(
-            resume_content=row["resume_content"],
+            resume_content=row.resume_pdf,
             job_description=prompt_description or parsed_description,
         )
-        connection.execute(
-            """
-            UPDATE applications
-            SET job_description = ?,
-                prompt_job_description = ?,
-                ats_score = ?,
-                ats_parsing_score = ?,
-                ats_keyword_score = ?,
-                ats_semantic_score = ?,
-                ats_formatting_risk = ?,
-                ats_missing_terms = ?,
-                ats_updated_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                parsed_description,
-                prompt_description,
-                score.overall_score if score is not None else None,
-                score.parsing_score if score is not None else None,
-                score.keyword_match_score if score is not None else None,
-                score.semantic_match_score if score is not None else None,
-                score.formatting_risk if score is not None else None,
-                _format_missing_terms(score) if score is not None else None,
-                now if score is not None else None,
-                now,
-                job_id,
-            ),
+        store.store_jod(
+            job_id,
+            source_text=parsed_description or "",
+            prompt_text=prompt_description or "",
+            ats=_ats_fields(score) if score is not None else None,
         )
-        connection.commit()
-    return score
+        return score
+
+    return _state_value(persist)
 
 
 def render_cover_letter_pdf_from_clo_html(body_html: str) -> bytes:
@@ -2131,17 +1833,11 @@ def delete_applications(
     normalized_job_ids = sorted({job_id.strip() for job_id in job_ids if job_id.strip()})
     if not normalized_job_ids:
         return 0
-
-    placeholders = ", ".join("?" for _ in normalized_job_ids)
-    with connect_database(database_path) as connection:
-        cursor = connection.execute(
-            f"DELETE FROM applications WHERE job_id IN ({placeholders})",
-            normalized_job_ids,
+    return int(
+        _state_value(
+            lambda: _state_store(database_path).delete(normalized_job_ids)
         )
-        deleted_count = cursor.rowcount
-        connection.commit()
-
-    return deleted_count
+    )
 
 
 def archive_applications(
@@ -2152,24 +1848,11 @@ def archive_applications(
     normalized_job_ids = _selected_job_ids(job_ids)
     if not normalized_job_ids:
         return 0
-
-    placeholders = ", ".join("?" for _ in normalized_job_ids)
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        cursor = connection.execute(
-            f"""
-            UPDATE applications
-            SET archived_at = ?,
-                updated_at = ?
-            WHERE job_id IN ({placeholders})
-              AND archived_at IS NULL
-            """,
-            [now, now, *normalized_job_ids],
+    return int(
+        _state_value(
+            lambda: _state_store(database_path).archive(normalized_job_ids)
         )
-        archived_count = cursor.rowcount
-        connection.commit()
-
-    return archived_count
+    )
 
 
 def unarchive_applications(
@@ -2180,24 +1863,11 @@ def unarchive_applications(
     normalized_job_ids = _selected_job_ids(job_ids)
     if not normalized_job_ids:
         return 0
-
-    placeholders = ", ".join("?" for _ in normalized_job_ids)
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    with connect_database(database_path) as connection:
-        cursor = connection.execute(
-            f"""
-            UPDATE applications
-            SET archived_at = NULL,
-                updated_at = ?
-            WHERE job_id IN ({placeholders})
-              AND archived_at IS NOT NULL
-            """,
-            [now, *normalized_job_ids],
+    return int(
+        _state_value(
+            lambda: _state_store(database_path).unarchive(normalized_job_ids)
         )
-        restored_count = cursor.rowcount
-        connection.commit()
-
-    return restored_count
+    )
 
 
 def refresh_missing_ats_scores(
@@ -2224,40 +1894,19 @@ def refresh_missing_ats_scores(
               {archive_clause}
             """
         ).fetchall()
-        updated_count = 0
-        for row in rows:
-            now = datetime.now(UTC).isoformat(timespec="seconds")
-            score = _calculate_ats_score(
-                resume_content=row["resume_content"],
-                job_description=row["prompt_job_description"] or row["job_description"],
-            )
-            if score is None:
-                continue
-            connection.execute(
-                """
-                UPDATE applications
-                SET ats_score = ?,
-                    ats_parsing_score = ?,
-                    ats_keyword_score = ?,
-                    ats_semantic_score = ?,
-                    ats_formatting_risk = ?,
-                    ats_missing_terms = ?,
-                    ats_updated_at = ?
-                WHERE job_id = ?
-                """,
-                (
-                    score.overall_score,
-                    score.parsing_score,
-                    score.keyword_match_score,
-                    score.semantic_match_score,
-                    score.formatting_risk,
-                    _format_missing_terms(score),
-                    now,
-                    row["job_id"],
-                ),
-            )
-            updated_count += 1
-        connection.commit()
+    updated_count = 0
+    store = _state_store(database_path)
+    for row in rows:
+        score = _calculate_ats_score(
+            resume_content=row["resume_content"],
+            job_description=row["prompt_job_description"] or row["job_description"],
+        )
+        if score is None:
+            continue
+        _state_value(lambda row=row, score=score: store.store_ats(
+            str(row["job_id"]), _ats_fields(score)
+        ))
+        updated_count += 1
     return updated_count
 
 
@@ -3105,17 +2754,14 @@ def create_app(
         applied_to = _normalize_applied_to(request.form.get("applied_to"))
         date_applied = request.form.get("date_applied") or None
         notes = request.form.get("notes", "")
-        now = datetime.now(UTC).isoformat(timespec="seconds")
-        with connect_database(database_path) as connection:
-            connection.execute(
-                """
-                UPDATE applications
-                SET applied_to = ?, date_applied = ?, notes = ?, updated_at = ?
-                WHERE job_id = ?
-                """,
-                (applied_to, date_applied, notes, now, job_id),
+        _state_value(
+            lambda: _state_store(database_path).update_application_status(
+                job_id,
+                applied_to=applied_to,
+                date_applied=date_applied,
+                notes=notes,
             )
-            connection.commit()
+        )
         if applied_to == "Yes":
             deleted_count = cleanup_downloaded_application_pdfs(download_dir)
             flash(f"Application updated. Cleared {deleted_count} downloaded PDF file(s).")

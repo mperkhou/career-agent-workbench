@@ -167,7 +167,7 @@ def test_factory_materializes_one_governed_demo_and_flask_row(tmp_path: Path) ->
     assert "Avery Demo" in generated["resume-v1.html"]
     assert "Cedar &amp; Comet Example Cooperative" in generated["resume-v1.html"]
 
-    app = create_app(resolved, command_executor=lambda _argv: 0, project_root=ROOT)
+    app = create_app(resolved, project_root=ROOT)
     response = app.test_client().get("/")
     assert response.status_code == 200
     assert b"demo-platform-001" in response.data

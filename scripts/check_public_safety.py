@@ -120,20 +120,10 @@ _WHEEL_REQUIRED = frozenset(
         "career_agent_workbench/__init__.py",
         "career_agent_workbench/__main__.py",
         "career_agent_workbench/cover_letter_rendering.py",
-        "career_agent_workbench/static/webapp/app.js",
         "career_agent_workbench/templates/resume/master_resume.html.j2",
-        "career_agent_workbench/templates/webapp/add.html",
-        "career_agent_workbench/templates/webapp/cover_letter_edit.html",
-        "career_agent_workbench/templates/webapp/index.html",
-        "career_agent_workbench/templates/webapp/jod.html",
-        "career_agent_workbench/templates/webapp/resume_edit.html",
-        "career_agent_workbench/templates/webapp/variant_review.html",
-        "career_agent_workbench/webapp_actions.py",
+        "career_agent_workbench/webapp.py",
         "career_agent_workbench/webapp_archive_runtime.py",
-        "career_agent_workbench/webapp_artifacts.py",
-        "career_agent_workbench/webapp_editors.py",
         "career_agent_workbench/webapp_ingestion.py",
-        "career_agent_workbench/webapp_tracker.py",
     }
 )
 
@@ -567,11 +557,9 @@ def installed_smoke(expected_prefix: Path) -> None:
 
         from career_agent_workbench import (
             cover_letter_rendering,
-            webapp_actions,
-            webapp_artifacts,
-            webapp_editors,
+            webapp,
+            webapp_archive_runtime,
             webapp_ingestion,
-            webapp_tracker,
         )
         from career_agent_workbench.resume_rendering import (
             render_resume_html_from_mapping,
@@ -585,36 +573,13 @@ def installed_smoke(expected_prefix: Path) -> None:
         resume_template = package.joinpath(
             "templates", "resume", "master_resume.html.j2"
         ).read_text("utf-8")
-        web_template = package.joinpath("templates", "webapp", "index.html").read_text(
-            "utf-8"
-        )
-        web_resources = (
-            package.joinpath("templates", "webapp", name).read_text("utf-8")
-            for name in (
-                "add.html",
-                "cover_letter_edit.html",
-                "jod.html",
-                "resume_edit.html",
-                "variant_review.html",
-            )
-        )
-        static_script = package.joinpath("static", "webapp", "app.js").read_text(
-            "utf-8"
-        )
-        if (
-            not resume_template
-            or not web_template
-            or not all(web_resources)
-            or not static_script
-        ):
+        if not resume_template:
             raise SafetyCheckError("Public-safety check failed.")
         modules = (
             cover_letter_rendering,
-            webapp_actions,
-            webapp_artifacts,
-            webapp_editors,
+            webapp,
+            webapp_archive_runtime,
             webapp_ingestion,
-            webapp_tracker,
         )
         if any(
             not Path(module.__file__).resolve().is_relative_to(prefix)

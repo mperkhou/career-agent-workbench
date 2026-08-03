@@ -15,6 +15,14 @@
   runtime boundary that preserves its inline frontend while resolving the
   external database, output, downloads, packaged resume template, operator
   lifecycle, and background-command paths safely.
+- Reconciled archived writes with the canonical public application-state
+  contract: initialized schemas are read without migration side effects,
+  resume edits and selection update their exact variant projection under an
+  opaque revision check, and lifecycle deletion remains referentially sound.
+- Removed the inactive reconstructed templates, JavaScript, and split Flask UI
+  modules after reference tracing proved the archived runtime was the sole
+  console/operator implementation; retained the bounded generic-ingestion
+  service and a compatibility import for `career_agent_workbench.webapp`.
 
 ## [1.2.0] - In progress
 

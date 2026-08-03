@@ -262,7 +262,10 @@ def test_tracker_rows_expose_dense_status_badges_timestamps_and_safe_targets(
     assert edit_link is not None
     assert edit_link.get("target") is None
 
-    rows = tracker_rows(store, tracker_applications(store, TrackerView()))
+    rows = tracker_rows(
+        _paths(tmp_path).database,
+        tracker_applications(store, TrackerView()),
+    )
     assert rows[0].status_key == "interview"
     assert rows[0].variant_keys == ("v1", "manual")
 

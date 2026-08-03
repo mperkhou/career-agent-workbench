@@ -324,7 +324,7 @@ def create_app(
         try:
             view = _tracker_view()
             applications = tracker_applications(store, view)
-            rows = tracker_rows(store, applications)
+            rows = tracker_rows(paths.require(WorkspaceMember.DATABASE), applications)
         except TrackerViewError:
             return "Application scope is invalid.", 400
         except Exception:  # noqa: BLE001 - keep store failures content-free.

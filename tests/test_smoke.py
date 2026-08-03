@@ -7,14 +7,14 @@ from career_agent_workbench.__main__ import main
 
 
 def test_package_version() -> None:
-    assert __version__ == "1.2.0"
+    assert __version__ == "2.0.0"
 
 
 @pytest.mark.parametrize(
     ("flag", "expected_output"),
     [
         ("--help", "Career Agent Workbench"),
-        ("--version", "career-agent-workbench 1.2.0"),
+        ("--version", "career-agent-workbench 2.0.0"),
     ],
 )
 def test_cli_help_and_version(

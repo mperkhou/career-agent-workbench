@@ -308,7 +308,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "_serve":
             if _TOKEN_RE.fullmatch(args.token) is None:
                 raise OperatorError(_ERROR)
-            from career_agent_workbench.webapp import main as webapp_main
+            from career_agent_workbench.webapp_archive_runtime import (
+                main as webapp_main,
+            )
 
             return webapp_main(
                 [

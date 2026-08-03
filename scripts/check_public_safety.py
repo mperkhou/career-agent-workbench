@@ -116,22 +116,14 @@ _SDIST_PREFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*-\d[0-9A-Za-z._-]*")
 _WHEEL_DIST_INFO_RE = re.compile(r"career_agent_workbench-\d[^/]*\.dist-info")
 _WHEEL_REQUIRED = frozenset(
     {
+        "career_agent_workbench/_archived_flask_source.py",
         "career_agent_workbench/__init__.py",
         "career_agent_workbench/__main__.py",
         "career_agent_workbench/cover_letter_rendering.py",
-        "career_agent_workbench/static/webapp/app.js",
         "career_agent_workbench/templates/resume/master_resume.html.j2",
-        "career_agent_workbench/templates/webapp/add.html",
-        "career_agent_workbench/templates/webapp/cover_letter_edit.html",
-        "career_agent_workbench/templates/webapp/index.html",
-        "career_agent_workbench/templates/webapp/jod.html",
-        "career_agent_workbench/templates/webapp/resume_edit.html",
-        "career_agent_workbench/templates/webapp/variant_review.html",
-        "career_agent_workbench/webapp_actions.py",
-        "career_agent_workbench/webapp_artifacts.py",
-        "career_agent_workbench/webapp_editors.py",
+        "career_agent_workbench/webapp.py",
+        "career_agent_workbench/webapp_archive_runtime.py",
         "career_agent_workbench/webapp_ingestion.py",
-        "career_agent_workbench/webapp_tracker.py",
     }
 )
 
@@ -565,11 +557,9 @@ def installed_smoke(expected_prefix: Path) -> None:
 
         from career_agent_workbench import (
             cover_letter_rendering,
-            webapp_actions,
-            webapp_artifacts,
-            webapp_editors,
+            webapp,
+            webapp_archive_runtime,
             webapp_ingestion,
-            webapp_tracker,
         )
         from career_agent_workbench.resume_rendering import (
             render_resume_html_from_mapping,
@@ -577,42 +567,19 @@ def installed_smoke(expected_prefix: Path) -> None:
 
         module_file = Path(career_agent_workbench.__file__).resolve(strict=True)
         module_file.relative_to(prefix)
-        if career_agent_workbench.__version__ != "1.2.0":
+        if career_agent_workbench.__version__ != "2.0.0":
             raise SafetyCheckError("Public-safety check failed.")
         package = resources.files("career_agent_workbench")
         resume_template = package.joinpath(
             "templates", "resume", "master_resume.html.j2"
         ).read_text("utf-8")
-        web_template = package.joinpath("templates", "webapp", "index.html").read_text(
-            "utf-8"
-        )
-        web_resources = (
-            package.joinpath("templates", "webapp", name).read_text("utf-8")
-            for name in (
-                "add.html",
-                "cover_letter_edit.html",
-                "jod.html",
-                "resume_edit.html",
-                "variant_review.html",
-            )
-        )
-        static_script = package.joinpath("static", "webapp", "app.js").read_text(
-            "utf-8"
-        )
-        if (
-            not resume_template
-            or not web_template
-            or not all(web_resources)
-            or not static_script
-        ):
+        if not resume_template:
             raise SafetyCheckError("Public-safety check failed.")
         modules = (
             cover_letter_rendering,
-            webapp_actions,
-            webapp_artifacts,
-            webapp_editors,
+            webapp,
+            webapp_archive_runtime,
             webapp_ingestion,
-            webapp_tracker,
         )
         if any(
             not Path(module.__file__).resolve().is_relative_to(prefix)
@@ -630,7 +597,9 @@ def installed_smoke(expected_prefix: Path) -> None:
             "career-agent-workbench-seed-jobs": (
                 "career_agent_workbench.workflows.matching:main"
             ),
-            "career-agent-workbench-webapp": "career_agent_workbench.webapp:main",
+            "career-agent-workbench-webapp": (
+                "career_agent_workbench.webapp_archive_runtime:main"
+            ),
             "career-agent-workbench-mcp": "career_agent_workbench.server:main",
         }
         installed_entries = {

@@ -14,8 +14,8 @@ not a test catalog or a legacy-count comparison.
 | Evidence-grounded v2 refinement and conditional writes | `tests/test_refinement_workflow_core.py` | Canonical evidence derivation, strict grounded patches, digest rechecks, workflow revisions, and no-write failure paths. |
 | Manual pass and highlighting boundaries | `tests/test_manual_highlighting_workflows.py` | Manual-from-v2 lineage, exact highlight targets, selection preservation, evidence drift rejection, and human review. |
 | CLI, scripts, and Make composition | `tests/test_cli_integration.py`, `tests/test_script_integration.py`, `tests/test_makefile_workflows.py` | Post-parse runtime resolution, compatibility handling, path-free defaults, explicit job selection, and mocked composition. |
-| Tracker, ingestion, lifecycle, and progress | `tests/test_webapp.py`, `tests/test_webapp_tracker.py`, `tests/test_webapp_ingestion.py`, `tests/test_webapp_actions.py` | Read-only GET behavior, preserved views/selections, atomic public URL seeding, exact action ordering, bounded polling, and explicit ATS refresh. |
-| JOD, resume, variant, CLO, and artifact workbench | `tests/test_webapp_artifacts.py`, `tests/test_webapp_editors.py`, `tests/test_webapp_cover_letters.py`, `tests/test_cover_letter_rendering.py` | Exact artifact targeting, lineage-aware comparison, CAS editing/revert/sync, JOD-plus-ATS writes, sanitation, deterministic PDFs, and guarded copies. |
+| Archive-first Flask tracker and workflows | `tests/test_archived_flask_source.py`, `tests/test_webapp_ingestion.py` | Bound inline frontend literals, 31-route activation, byte-stable reads, canonical add/select/delete state, variant-targeted CAS edit/revert, configured downloads, and bounded public URL ingestion. |
+| JOD, resume, variant, CLO, and artifact state | `tests/test_application_state.py`, `tests/test_cover_letter_rendering.py`, `tests/test_archived_flask_source.py` | Exact artifact targeting, lineage-aware selection, CAS editing/revert/sync, JOD-plus-ATS projection, CLO sanitation, deterministic PDFs, and guarded copies. |
 | MCP public tools and lazy configured matching | `tests/test_mcp_integration.py` | Workspace-free public tools, path-free schemas, startup-once configuration, lazy matching, owned-capability cleanup, and an offline stdio handshake/tool list. |
 | Fictional demo workspace and materializer | `tests/test_demo_workspace.py` | From-scratch source semantics, one offline row/v1/CLO, readable examples, Flask presentation, and idempotence. |
 | Operator runtime and exact skills | `tests/test_operator_helpers.py`, `tests/test_makefile_workflows.py`, `tests/test_guidance.py` | Public-venv commands, explicit Chromium installation, exact PID ownership, stale-state handling, browser opt-in, exact-five idempotent links, and current guidance/assets. |
@@ -27,6 +27,6 @@ not a test catalog or a legacy-count comparison.
   replaces them with newly authored fictional content.
 - One small demo does not need a fixture-loader or global `conftest.py`
   abstraction.
-- Exact legacy markup/count parity, private fixtures, authenticated LinkedIn,
-  application submission, multi-user deployment, and generalized security
-  architecture remain outside this release.
+- Private fixtures, authenticated LinkedIn, application submission, multi-user
+  deployment, and generalized security architecture remain outside this
+  release. The bound archived inline frontend is now the public Flask baseline.

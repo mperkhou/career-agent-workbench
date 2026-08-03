@@ -40,7 +40,9 @@ CONSOLE_SCRIPTS = {
     "career-agent-workbench-seed-jobs": (
         "career_agent_workbench.workflows.matching:main"
     ),
-    "career-agent-workbench-webapp": "career_agent_workbench.webapp:main",
+    "career-agent-workbench-webapp": (
+        "career_agent_workbench.webapp_archive_runtime:main"
+    ),
     "career-agent-workbench-mcp": "career_agent_workbench.server:main",
 }
 

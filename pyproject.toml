@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "career-agent-workbench"
-version = "1.2.0"
+version = "2.0.0"
 description = "A public-safe scaffold for governed career workflow automation."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,7 +44,7 @@ career-agent-workbench = "career_agent_workbench.__main__:main"
 career-agent-workbench-audit-jods = "career_agent_workbench.jod_cleaner_audit:main"
 career-agent-workbench-refine-resume = "career_agent_workbench.resume_refinement_cli:main"
 career-agent-workbench-seed-jobs = "career_agent_workbench.workflows.matching:main"
-career-agent-workbench-webapp = "career_agent_workbench.webapp:main"
+career-agent-workbench-webapp = "career_agent_workbench.webapp_archive_runtime:main"
 career-agent-workbench-mcp = "career_agent_workbench.server:main"
 
 [tool.hatch.build.targets.wheel]
@@ -73,7 +73,7 @@ include = [
   "/docs/assets/tracker-main-annotated.png",
   "/docs/behavior-coverage.md",
   "/docs/release-notes/1.0.0.md",
-  "/docs/release-notes/1.2.0.md",
+  "/docs/release-notes/2.0.0.md",
   "/examples/demo-workspace/.blacklist",
   "/examples/demo-workspace/README.md",
   "/examples/demo-workspace/jobs/demo-platform-engineer.json",
@@ -82,6 +82,7 @@ include = [
   "/pyproject.toml",
   "/src/career_agent_workbench/__init__.py",
   "/src/career_agent_workbench/__main__.py",
+  "/src/career_agent_workbench/_archived_flask_source.py",
   "/src/career_agent_workbench/api_client.py",
   "/src/career_agent_workbench/application_resume.py",
   "/src/career_agent_workbench/application_state.py",
@@ -113,24 +114,13 @@ include = [
   "/src/career_agent_workbench/server.py",
   "/src/career_agent_workbench/services/__init__.py",
   "/src/career_agent_workbench/services/job_search.py",
-  "/src/career_agent_workbench/static/webapp/app.js",
   "/src/career_agent_workbench/templates/resume/master_resume.html.j2",
-  "/src/career_agent_workbench/templates/webapp/add.html",
-  "/src/career_agent_workbench/templates/webapp/cover_letter_edit.html",
-  "/src/career_agent_workbench/templates/webapp/index.html",
-  "/src/career_agent_workbench/templates/webapp/jod.html",
-  "/src/career_agent_workbench/templates/webapp/resume_edit.html",
-  "/src/career_agent_workbench/templates/webapp/variant_review.html",
   "/src/career_agent_workbench/tools/__init__.py",
   "/src/career_agent_workbench/tools/jobs.py",
   "/src/career_agent_workbench/tools/matching.py",
   "/src/career_agent_workbench/webapp.py",
-  "/src/career_agent_workbench/webapp_actions.py",
-  "/src/career_agent_workbench/webapp_artifacts.py",
-  "/src/career_agent_workbench/webapp_editors.py",
+  "/src/career_agent_workbench/webapp_archive_runtime.py",
   "/src/career_agent_workbench/webapp_ingestion.py",
-  "/src/career_agent_workbench/webapp_resume_fields.py",
-  "/src/career_agent_workbench/webapp_tracker.py",
   "/src/career_agent_workbench/workflows/__init__.py",
   "/src/career_agent_workbench/workflows/applications.py",
   "/src/career_agent_workbench/workflows/matching.py",
@@ -162,6 +152,7 @@ include = [
   "/skills/master-resume-yaml/SKILL.md",
   "/tests/test_application_resume.py",
   "/tests/test_application_state.py",
+  "/tests/test_archived_flask_source.py",
   "/tests/test_ats.py",
   "/tests/test_config.py",
   "/tests/test_cover_letter_rendering.py",
@@ -184,14 +175,7 @@ include = [
   "/tests/test_resume_html_template.py",
   "/tests/test_script_integration.py",
   "/tests/test_smoke.py",
-  "/tests/test_webapp.py",
-  "/tests/test_webapp_actions.py",
-  "/tests/test_webapp_artifacts.py",
-  "/tests/test_webapp_cover_letters.py",
-  "/tests/test_webapp_editors.py",
   "/tests/test_webapp_ingestion.py",
-  "/tests/test_webapp_resume_fields.py",
-  "/tests/test_webapp_tracker.py",
 ]
 
 [tool.pytest.ini_options]
@@ -204,3 +188,6 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+exclude = ["src/career_agent_workbench/_archived_flask_source.py"]

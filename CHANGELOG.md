@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.0] - In progress
+
+### Changed
+
+- Initialized a documentation-parity workflow to replace the compact fictional
+  resume/MRO with a realistic full-depth public demo, rebuild README examples
+  from that approved source, and reassess diagrams and Flask screenshots behind
+  explicit privacy and user-review gates.
+
 ## [2.0.0] - In progress
 
 ### Changed

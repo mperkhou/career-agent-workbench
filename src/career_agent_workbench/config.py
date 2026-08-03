@@ -24,7 +24,7 @@ _MISSING = object()
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0 Safari/537.36 career-agent-workbench/2.0.0"
+    "Chrome/125.0 Safari/537.36 career-agent-workbench/2.1.0"
 )
 
 

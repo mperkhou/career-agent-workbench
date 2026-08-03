@@ -13,9 +13,266 @@
   const collapseButton = document.querySelector("#action-collapse");
   const retryButton = document.querySelector("#action-retry");
   const dismissButton = document.querySelector("#action-dismiss");
+  const coverForm = document.querySelector("[data-cover-letter-form]");
+  const coverEditor = document.querySelector("[data-cover-editor]");
+  const coverSource = document.querySelector("[data-cover-source]");
+  const coverPreview = document.querySelector("[data-cover-preview]");
+  const coverStatus = document.querySelector("[data-cover-status]");
+  const coverLinkUrl = document.querySelector("[data-cover-link-url]");
   const terminalStates = new Set(["completed", "failed"]);
   terminalStates.add("partial");
   let currentActionId = null;
+  let coverSourceEdited = false;
+  let coverSelection = null;
+
+  const coverAllowedTags = new Set(["p", "div", "br", "strong", "b", "em", "i", "a"]);
+  const coverRemovedTags = new Set(["script", "style", "iframe", "object", "embed"]);
+  const coverTagAliases = new Map([
+    ["div", "p"],
+    ["b", "strong"],
+    ["i", "em"],
+  ]);
+
+  function safeCoverHref(value) {
+    if (
+      typeof value !== "string"
+      || value.length > 4096
+      || /[\u0000-\u001f]/u.test(value)
+    ) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol === "mailto:") {
+        return parsed.pathname.includes("@");
+      }
+      return ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function sanitizedCoverFragment(value) {
+    const parsed = new DOMParser().parseFromString(String(value), "text/html");
+    const fragment = document.createDocumentFragment();
+
+    function appendSafeNode(source, target) {
+      if (source.nodeType === Node.TEXT_NODE) {
+        target.append(document.createTextNode(source.textContent || ""));
+        return;
+      }
+      if (source.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+      const name = source.tagName.toLowerCase();
+      if (coverRemovedTags.has(name)) {
+        return;
+      }
+      if (!coverAllowedTags.has(name)) {
+        for (const child of source.childNodes) {
+          appendSafeNode(child, target);
+        }
+        return;
+      }
+      const renderedName = coverTagAliases.get(name) || name;
+      if (renderedName === "a" && !safeCoverHref(source.getAttribute("href"))) {
+        for (const child of source.childNodes) {
+          appendSafeNode(child, target);
+        }
+        return;
+      }
+      const rendered = document.createElement(renderedName);
+      if (renderedName === "a") {
+        rendered.setAttribute("href", source.getAttribute("href"));
+      }
+      for (const child of source.childNodes) {
+        appendSafeNode(child, rendered);
+      }
+      target.append(rendered);
+    }
+
+    for (const child of parsed.body.childNodes) {
+      appendSafeNode(child, fragment);
+    }
+    return fragment;
+  }
+
+  function sanitizedCoverHtml(value) {
+    const container = document.createElement("div");
+    container.append(sanitizedCoverFragment(value));
+    return container.innerHTML;
+  }
+
+  function setCoverStatus(message) {
+    if (coverStatus) {
+      coverStatus.textContent = message;
+    }
+  }
+
+  function renderCoverPreview(value) {
+    if (coverPreview) {
+      coverPreview.replaceChildren(sanitizedCoverFragment(value));
+    }
+  }
+
+  function coverValueIsBounded(value) {
+    if (!coverSource) {
+      return false;
+    }
+    const bounded = value.length <= coverSource.maxLength;
+    coverSource.setCustomValidity(bounded ? "" : "Cover letter input is too long.");
+    return bounded;
+  }
+
+  function synchronizeCoverEditor() {
+    if (!coverEditor || !coverSource) {
+      return false;
+    }
+    const sanitized = sanitizedCoverHtml(coverEditor.innerHTML);
+    coverSource.value = sanitized;
+    coverSourceEdited = false;
+    renderCoverPreview(sanitized);
+    const bounded = coverValueIsBounded(sanitized);
+    setCoverStatus(
+      bounded
+        ? "Preview and sanitized source are synchronized."
+        : "Cover letter input exceeds the supported size.",
+    );
+    return bounded;
+  }
+
+  function rememberCoverSelection() {
+    if (!coverEditor) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (
+      selection
+      && selection.rangeCount === 1
+      && coverEditor.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      coverSelection = selection.getRangeAt(0).cloneRange();
+    }
+  }
+
+  function restoreCoverSelection() {
+    if (!coverEditor || !coverSelection) {
+      coverEditor?.focus();
+      return;
+    }
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(coverSelection);
+    coverEditor.focus();
+  }
+
+  function plainTextCoverHtml(value) {
+    return String(value)
+      .split(/\r?\n/u)
+      .map((line) => {
+        const container = document.createElement("span");
+        container.textContent = line;
+        return container.innerHTML;
+      })
+      .join("<br>");
+  }
+
+  function insertCoverHtml(value) {
+    restoreCoverSelection();
+    document.execCommand("insertHTML", false, sanitizedCoverHtml(value));
+    rememberCoverSelection();
+    synchronizeCoverEditor();
+  }
+
+  function initializeCoverEditor() {
+    if (!coverForm || !coverEditor || !coverSource || !coverPreview) {
+      return;
+    }
+    const initial = sanitizedCoverHtml(coverSource.value);
+    coverSource.value = initial;
+    coverEditor.replaceChildren(sanitizedCoverFragment(initial));
+    renderCoverPreview(initial);
+    coverValueIsBounded(initial);
+
+    coverEditor.addEventListener("input", () => {
+      rememberCoverSelection();
+      synchronizeCoverEditor();
+    });
+    coverEditor.addEventListener("keyup", rememberCoverSelection);
+    coverEditor.addEventListener("mouseup", rememberCoverSelection);
+    coverEditor.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const clipboard = event.clipboardData;
+      const htmlValue = clipboard?.getData("text/html");
+      insertCoverHtml(htmlValue || plainTextCoverHtml(clipboard?.getData("text/plain") || ""));
+    });
+    coverEditor.addEventListener("drop", (event) => {
+      event.preventDefault();
+      insertCoverHtml(plainTextCoverHtml(event.dataTransfer?.getData("text/plain") || ""));
+    });
+
+    coverSource.addEventListener("input", () => {
+      coverSourceEdited = true;
+      const sanitized = sanitizedCoverHtml(coverSource.value);
+      renderCoverPreview(sanitized);
+      const bounded = coverValueIsBounded(coverSource.value);
+      setCoverStatus(
+        bounded
+          ? "Source changes are sanitized in preview; recover to continue rendered editing."
+          : "Cover letter input exceeds the supported size.",
+      );
+    });
+
+    coverForm.querySelector("[data-cover-recover]")?.addEventListener("click", () => {
+      const sanitized = sanitizedCoverHtml(coverSource.value);
+      coverSource.value = sanitized;
+      coverEditor.replaceChildren(sanitizedCoverFragment(sanitized));
+      coverSourceEdited = false;
+      renderCoverPreview(sanitized);
+      coverValueIsBounded(sanitized);
+      coverEditor.focus();
+      setCoverStatus("Rendered editor recovered from sanitized source.");
+    });
+
+    for (const button of coverForm.querySelectorAll("[data-cover-command]")) {
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () => {
+        const command = button.dataset.coverCommand;
+        restoreCoverSelection();
+        if (command === "createLink") {
+          const href = coverLinkUrl?.value.trim() || "";
+          if (!safeCoverHref(href)) {
+            setCoverStatus("Enter a safe HTTP, HTTPS, or email link.");
+            return;
+          }
+          document.execCommand("createLink", false, href);
+        } else if (command === "insertLineBreak") {
+          document.execCommand("insertHTML", false, "<br>");
+        } else {
+          document.execCommand(command, false, button.dataset.coverCommandValue || null);
+        }
+        rememberCoverSelection();
+        synchronizeCoverEditor();
+      });
+    }
+
+    coverForm.addEventListener("submit", (event) => {
+      let bounded;
+      if (coverSourceEdited) {
+        const sanitized = sanitizedCoverHtml(coverSource.value);
+        coverSource.value = sanitized;
+        coverSourceEdited = false;
+        renderCoverPreview(sanitized);
+        bounded = coverValueIsBounded(sanitized);
+      } else {
+        bounded = synchronizeCoverEditor();
+      }
+      if (!bounded) {
+        event.preventDefault();
+        coverSource.reportValidity();
+      }
+    });
+  }
 
   function setPath(target, path, value) {
     let selected = target;
@@ -365,5 +622,6 @@
     }
   });
 
+  initializeCoverEditor();
   renderPreferredAction();
 })();

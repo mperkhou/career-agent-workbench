@@ -29,6 +29,7 @@ from career_agent_workbench.cover_letter_rendering import (
     MAX_COVER_LETTER_HTML_CHARS,
     blank_cover_letter,
     render_cover_letter,
+    sanitize_cover_letter_html,
 )
 from career_agent_workbench.webapp_actions import (
     ACTION_OPTIONS,
@@ -960,12 +961,7 @@ def create_app(
             view = _tracker_view()
             application = store.get_application(job_id)
             value = application.cover_letter or blank_cover_letter()
-            body_html = value.get("body_html", "")
-            if (
-                type(body_html) is not str
-                or len(body_html) > MAX_COVER_LETTER_HTML_CHARS
-            ):
-                raise ValueError
+            body_html = sanitize_cover_letter_html(value.get("body_html", ""))
             result = request.args.get("result", "")
             if result not in {"", "saved"}:
                 raise ValueError
@@ -979,6 +975,7 @@ def create_app(
             "webapp/cover_letter_edit.html",
             application=application,
             body_html=body_html,
+            max_body_chars=MAX_COVER_LETTER_HTML_CHARS,
             result=result,
             view=view,
         )

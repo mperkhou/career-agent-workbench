@@ -255,6 +255,191 @@ def test_structured_save_preserves_opaque_optional_section_values() -> None:
 
 
 @pytest.mark.parametrize(
+    ("section", "list_key", "factory"),
+    [
+        ("header_top", "contact_items", lambda index: f"contact-{index}"),
+        (
+            "header_top",
+            "links",
+            lambda index: {
+                "label": f"Link {index}",
+                "url": f"https://example.test/{index}",
+                "unknown": index,
+            },
+        ),
+        (
+            "core_technical_skills",
+            "bullet_points",
+            lambda index: {"text": f"Skill {index}", "unknown": index},
+        ),
+        (
+            "professional_experience",
+            "jobs",
+            lambda index: {
+                "line_1": {"company_name_text": f"Company {index}"},
+                "line_2": {},
+                "bullet_points": [],
+                "unknown": index,
+            },
+        ),
+        (
+            "education_and_certifications",
+            "items",
+            lambda index: {
+                "line_1": {"institution_name_text": f"School {index}"},
+                "line_2": {},
+                "bullet_points": [],
+                "unknown": index,
+            },
+        ),
+        (
+            "certifications",
+            "bullet_points",
+            lambda index: {"text": f"Certificate {index}", "unknown": index},
+        ),
+        (
+            "portfolio",
+            "projects",
+            lambda index: {"title": f"Project {index}", "unknown": index},
+        ),
+    ],
+)
+def test_structured_noop_preserves_every_bounded_list_tail(
+    section: str, list_key: str, factory
+) -> None:
+    resume = _complete_resume()
+    resume[section][list_key] = [factory(index) for index in range(101)]
+    before = copy.deepcopy(resume)
+
+    result = apply_resume_field_payload(resume, resume_field_payload_text(resume))
+
+    assert result == before
+    assert resume == before
+
+
+def test_structured_bounded_edits_leave_opaque_tail_unchanged() -> None:
+    resume = _complete_resume()
+    bullets = [
+        {"text": f"Certificate {index}", "unknown": {"index": index}}
+        for index in range(102)
+    ]
+    resume["certifications"]["bullet_points"] = bullets
+    payload = _payload(resume)
+    editable = payload["certifications"]["bullet_points"]
+    editable[1]["text"] = "Edited certificate"
+    editable[:] = [editable[1], editable[0], *editable[2:5], *editable[6:]]
+
+    result = apply_resume_field_payload(resume, json.dumps(payload))
+    actual = result["certifications"]["bullet_points"]
+
+    assert len(actual) == 101
+    assert actual[0] == {
+        "text": "Edited certificate",
+        "unknown": {"index": 1},
+    }
+    assert actual[1] == bullets[0]
+    assert actual[5:99] == bullets[6:100]
+    assert actual[99:] == bullets[100:]
+    assert resume["certifications"]["bullet_points"] == bullets
+
+
+def test_structured_payload_cannot_reference_unexposed_tail() -> None:
+    resume = _complete_resume()
+    resume["certifications"]["bullet_points"] = [
+        {"text": f"Certificate {index}", "unknown": index} for index in range(101)
+    ]
+    before = copy.deepcopy(resume)
+    payload = _payload(resume)
+    payload["certifications"]["bullet_points"][0]["source"] = 100
+
+    with pytest.raises(ResumeFieldsError, match="Structured resume data is invalid"):
+        apply_resume_field_payload(resume, json.dumps(payload))
+
+    assert resume == before
+
+
+@pytest.mark.parametrize(
+    ("section", "list_key"),
+    [
+        ("professional_experience", "jobs"),
+        ("education_and_certifications", "items"),
+    ],
+)
+def test_structured_nested_bullet_edits_preserve_unexposed_tail(
+    section: str, list_key: str
+) -> None:
+    resume = _complete_resume()
+    entry = resume[section][list_key][0]
+    bullets = [{"text": f"Evidence {index}", "unknown": index} for index in range(102)]
+    entry["bullet_points"] = bullets
+    payload = _payload(resume)
+    payload_section = (
+        payload["education"]
+        if section == "education_and_certifications"
+        else payload[section]
+    )
+    payload_entry = payload_section["entries" if list_key == "items" else list_key][0]
+    editable = payload_entry["bullet_points"]
+    editable[0]["text"] = "Edited evidence"
+    editable[:] = [editable[1], editable[0], *editable[2:4], *editable[5:]]
+
+    result = apply_resume_field_payload(resume, json.dumps(payload))
+    actual = result[section][list_key][0]["bullet_points"]
+
+    assert len(actual) == 101
+    assert actual[0] == bullets[1]
+    assert actual[1] == {"text": "Edited evidence", "unknown": 0}
+    assert actual[4:99] == bullets[5:100]
+    assert actual[99:] == bullets[100:]
+
+
+def test_structured_skill_string_edits_preserve_opaque_and_tail_values() -> None:
+    resume = _complete_resume()
+    skill = resume["core_technical_skills"]["bullet_points"][0]
+    primary = [f"Primary {index}" for index in range(102)]
+    additional = [f"Additional {index}" for index in range(102)]
+    matched = [f"Matched {index}" for index in range(102)]
+    skill["items"]["primary"] = primary
+    skill["items"]["additional"] = additional
+    skill["jod_matched_items"] = matched
+    payload = _payload(resume)
+    editable = payload["core_technical_skills"]["bullet_points"][0]
+    editable["primary"] = [primary[1], "Edited primary", *primary[2:5], *primary[6:100]]
+    editable["additional"] = [additional[1], additional[0], *additional[2:100]]
+    editable["jod_matched_items"] = matched[1:100]
+
+    result = apply_resume_field_payload(resume, json.dumps(payload))
+    result_skill = result["core_technical_skills"]["bullet_points"][0]
+
+    assert result_skill["items"]["primary"] == [
+        primary[1],
+        "Edited primary",
+        *primary[2:5],
+        *primary[6:],
+    ]
+    assert result_skill["items"]["additional"] == [
+        additional[1],
+        additional[0],
+        *additional[2:],
+    ]
+    assert result_skill["jod_matched_items"] == matched[1:]
+    assert resume["core_technical_skills"]["bullet_points"][0] == skill
+
+
+def test_structured_skill_string_noop_preserves_opaque_editable_values() -> None:
+    resume = _complete_resume()
+    skill = resume["core_technical_skills"]["bullet_points"][0]
+    primary = [f"Primary {index}" for index in range(99)]
+    primary.insert(5, {"opaque": True})
+    primary.extend(["Tail 100", {"opaque_tail": True}])
+    skill["items"]["primary"] = primary
+
+    result = apply_resume_field_payload(resume, resume_field_payload_text(resume))
+
+    assert result == resume
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda payload: payload.update(version=2),

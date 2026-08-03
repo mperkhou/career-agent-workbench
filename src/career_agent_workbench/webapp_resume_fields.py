@@ -556,6 +556,7 @@ def _apply_item_list(original: object, payload: list[Any], patcher: Any) -> list
     values = list(original) if type(original) in {list, tuple} else []
     if len(payload) > _MAX_ITEMS:
         raise ResumeFieldsError("Structured resume data is invalid.")
+    editable_count = min(len(values), _MAX_ITEMS)
     seen: set[int] = set()
     result: list[Any] = []
     for item_payload in payload:
@@ -567,7 +568,7 @@ def _apply_item_list(original: object, payload: list[Any], patcher: Any) -> list
         elif (
             type(source_index) is not int
             or source_index < 0
-            or source_index >= len(values)
+            or source_index >= editable_count
             or source_index in seen
         ):
             raise ResumeFieldsError("Structured resume data is invalid.")
@@ -575,6 +576,7 @@ def _apply_item_list(original: object, payload: list[Any], patcher: Any) -> list
             seen.add(source_index)
             original_item = values[source_index]
         result.append(patcher(original_item, item_payload))
+    result.extend(copy.deepcopy(values[_MAX_ITEMS:]))
     return result
 
 
@@ -629,14 +631,29 @@ def _patch_skill_item(original: object, payload: dict[str, Any]) -> Any:
     _set_text(result, "category", _payload_text(payload, "category"))
     items_value = result.get("items")
     items = copy.deepcopy(items_value) if type(items_value) is dict else {}
-    _set_list(items, "primary", _payload_string_list(payload, "primary"))
-    _set_list(items, "additional", _payload_string_list(payload, "additional"))
+    _set_list(
+        items,
+        "primary",
+        _apply_string_list(
+            items.get("primary"), _payload_string_list(payload, "primary")
+        ),
+    )
+    _set_list(
+        items,
+        "additional",
+        _apply_string_list(
+            items.get("additional"), _payload_string_list(payload, "additional")
+        ),
+    )
     if type(items_value) is dict or items:
         result["items"] = items
     _set_list(
         result,
         "jod_matched_items",
-        _payload_string_list(payload, "jod_matched_items"),
+        _apply_string_list(
+            result.get("jod_matched_items"),
+            _payload_string_list(payload, "jod_matched_items"),
+        ),
     )
     if original is None and not (
         _payload_text(payload, "text") or _payload_text(payload, "category") or items
@@ -855,6 +872,22 @@ def _payload_string_list(value: Mapping[str, Any], key: str) -> list[str]:
     return [_checked_text(item) for item in _payload_list(value, key)]
 
 
+def _apply_string_list(original: object, payload: list[str]) -> list[Any]:
+    values = list(original) if type(original) in {list, tuple} else []
+    result: list[Any] = []
+    payload_index = 0
+    for item in values[:_MAX_ITEMS]:
+        if type(item) is str:
+            if payload_index < len(payload):
+                result.append(payload[payload_index])
+                payload_index += 1
+        else:
+            result.append(copy.deepcopy(item))
+    result.extend(payload[payload_index:])
+    result.extend(copy.deepcopy(values[_MAX_ITEMS:]))
+    return result
+
+
 def _payload_choice(value: Mapping[str, Any], key: str, choices: Sequence[str]) -> str:
     selected = value.get(key)
     if selected not in choices:
@@ -886,7 +919,7 @@ def _boolean(value: object, default: bool) -> bool:
 def _string_items(value: object) -> list[str]:
     if type(value) not in {list, tuple}:
         return []
-    return [_string(item) for item in value if type(item) is str][:_MAX_ITEMS]
+    return [_string(item) for item in value[:_MAX_ITEMS] if type(item) is str]
 
 
 def _checked_text(value: object) -> str:

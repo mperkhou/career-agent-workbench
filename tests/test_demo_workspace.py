@@ -64,10 +64,14 @@ def _runtime(workspace: Path):
     )
 
 
-def test_tracked_demo_source_is_small_coherent_and_fictional() -> None:
+def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     actual = {path.relative_to(SOURCE) for path in SOURCE.rglob("*") if path.is_file()}
     assert actual == MANIFEST
-    assert all(0 < (SOURCE / path).stat().st_size < 20_000 for path in MANIFEST)
+    size_limits = {path: 20_000 for path in MANIFEST}
+    size_limits[Path("profile/MP-MASTER-RESUME.txt")] = 40_000
+    assert all(
+        0 < (SOURCE / path).stat().st_size < size_limits[path] for path in MANIFEST
+    )
     assert not any(
         path.suffix.casefold() in {".db", ".sqlite", ".sqlite3", ".pdf", ".docx"}
         for path in actual
@@ -98,10 +102,57 @@ def test_tracked_demo_source_is_small_coherent_and_fictional() -> None:
             assert parsed.hostname is not None
             assert parsed.hostname.endswith(".example.test")
     source_text = (SOURCE / "profile/MP-MASTER-RESUME.txt").read_text("utf-8")
+    assert source_text.startswith("Avery Demo\nFictional Public Resume")
     assert "Avery Demo" in source_text
     assert "avery.demo@example.test" in source_text
     assert "Nimbus Quay Example Labs" in source_text
     assert "Cedar & Comet Example Cooperative" in source_text
+    section_headings = (
+        "Professional Summary",
+        "Core Technical Skills",
+        "Professional Experience",
+        "Education",
+        "Certifications",
+        "Portfolio",
+    )
+    section_positions = [
+        source_text.index(f"\n{heading}\n") for heading in section_headings
+    ]
+    assert section_positions == sorted(section_positions)
+
+    skills_text = source_text.split("\nCore Technical Skills\n", 1)[1].split(
+        "\nProfessional Experience\n", 1
+    )[0]
+    assert sum(line.startswith("- ") for line in skills_text.splitlines()) == 14
+
+    role_markers = (
+        "Nimbus Quay Example Labs | Remote",
+        "Cedar & Comet Example Cooperative | Example City, ZZ",
+        "Lantern Vale Health Network | Northport, ZZ",
+        "Harbor Thread Media Collective | Port Mason, ZZ",
+        "Blue Mesa Imaging Works | Ridgeview, ZZ",
+        "Meridian Orchard Research Studio | Lakehaven, ZZ",
+        "Northstar Example University | Lakehaven, ZZ",
+        "Education",
+    )
+    role_bullets = (17, 7, 9, 7, 10, 7, 3)
+    for start, end, expected in zip(role_markers, role_markers[1:], role_bullets):
+        role_text = source_text.split(f"\n{start}\n", 1)[1].split(f"\n{end}\n", 1)[0]
+        assert sum(line.startswith("- ") for line in role_text.splitlines()) == expected
+    long_role = source_text.split(f"\n{role_markers[0]}\n", 1)[1].split(
+        f"\n{role_markers[1]}\n", 1
+    )[0]
+    assert sum(line.startswith("Category: ") for line in long_role.splitlines()) == 13
+
+    education_text = source_text.split("\nEducation\n", 1)[1].split(
+        "\nCertifications\n", 1
+    )[0]
+    certifications_text = source_text.split("\nCertifications\n", 1)[1].split(
+        "\nPortfolio\n", 1
+    )[0]
+    assert sum(line.startswith("- ") for line in education_text.splitlines()) == 2
+    assert sum(line.startswith("- ") for line in certifications_text.splitlines()) == 3
+    assert "https://code.example.test/" in source_text
 
     job = JobDetails.model_validate_json(
         (SOURCE / "jobs/demo-platform-engineer.json").read_text("utf-8")

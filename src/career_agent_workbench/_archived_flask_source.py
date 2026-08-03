@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import difflib
 import json
+import os
 import re
 import sqlite3
 import subprocess
 import sys
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html import escape as html_escape
@@ -26,27 +26,30 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
-from linkedin_career_mcp.ats import AtsProxyScore, calculate_ats_proxy_score
-from linkedin_career_mcp.config import load_settings
-from linkedin_career_mcp.errors import LinkedInCareerMcpError
-from linkedin_career_mcp.generic_job_scraper import fetch_generic_job_details
-from linkedin_career_mcp.jod import clean_job_description_for_prompt
-from linkedin_career_mcp.models import JobDetails
-from linkedin_career_mcp.providers.linkedin_public import (
+from career_agent_workbench.ats import AtsProxyScore, calculate_ats_proxy_score
+from career_agent_workbench.config import load_settings
+from career_agent_workbench.errors import CareerAgentWorkbenchError
+from career_agent_workbench.generic_job_scraper import (
+    extract_generic_job_details_from_html,
+)
+from career_agent_workbench.jod import clean_job_description_for_prompt
+from career_agent_workbench.models import JobDetails
+from career_agent_workbench.providers.linkedin_public import (
     LinkedInPublicJobsProvider,
     extract_job_id,
 )
-from linkedin_career_mcp.resume_manual_profiles import (
+from career_agent_workbench.resume_manual_profiles import (
     DEFAULT_MANUAL_PASS_PROFILE,
     ManualPassProfileKey,
     parse_manual_pass_profile,
 )
-from linkedin_career_mcp.resume_rendering import (
+from career_agent_workbench.resume_rendering import (
     render_resume_html_from_mapping,
     render_resume_pdf_from_html,
     rich_text,
     sanitize_resume_rich_text,
 )
+from career_agent_workbench.webapp_ingestion import fetch_generic_html
 
 DEFAULT_OUTPUT_DIR = Path("output")
 DEFAULT_DATABASE = Path("tracking/applications.sqlite3")
@@ -197,6 +200,40 @@ BackgroundActionRunner = Callable[..., None]
 
 _ACTION_RUNS: dict[str, BackgroundActionRun] = {}
 _ACTION_RUN_LOCK = threading.Lock()
+_RUNTIME_PROJECT_ROOT: Path | None = None
+_RUNTIME_PROCESS_ENV: dict[str, str] = {}
+_RUNTIME_PATH_KEYS = {
+    "CAREER_AGENT_WORKBENCH_WORKSPACE",
+    "CAREER_AGENT_WORKBENCH_PROFILE_DIR",
+    "CAREER_AGENT_WORKBENCH_MASTER_RESUME",
+    "CAREER_AGENT_WORKBENCH_MASTER_RESUME_TEXT",
+    "CAREER_AGENT_WORKBENCH_OUTPUT_DIR",
+    "CAREER_AGENT_WORKBENCH_DATABASE",
+    "CAREER_AGENT_WORKBENCH_BLACKLIST",
+    "CAREER_AGENT_WORKBENCH_TMP_DIR",
+    "CAREER_AGENT_WORKBENCH_DOWNLOAD_DIR",
+}
+
+
+def configure_runtime_boundaries(
+    *,
+    project_root: Path,
+    process_env: Mapping[str, str],
+) -> None:
+    """Bind public runtime paths without changing the archived UI source."""
+
+    resolved_root = project_root.resolve(strict=True)
+    if not (resolved_root / "Makefile").is_file():
+        raise ValueError("Web application project root is invalid.")
+    configured: dict[str, str] = {}
+    for key, value in process_env.items():
+        if key not in _RUNTIME_PATH_KEYS or not value or "\x00" in value:
+            raise ValueError("Web application runtime path is invalid.")
+        configured[key] = value
+
+    global _RUNTIME_PROCESS_ENV, _RUNTIME_PROJECT_ROOT
+    _RUNTIME_PROJECT_ROOT = resolved_root
+    _RUNTIME_PROCESS_ENV = configured
 
 
 def connect_database(database_path: Path) -> sqlite3.Connection:
@@ -881,7 +918,7 @@ def add_generic_application_from_url(
     job_url: str,
 ) -> str:
     url = str(job_url or "").strip()
-    details = asyncio.run(_fetch_generic_job_details(url))
+    details = _fetch_generic_job_details(url)
     raw_description = str(details.description or "").strip() or None
     if raw_description is None:
         raise ValueError("No usable job description was found at that URL.")
@@ -914,13 +951,14 @@ async def _fetch_linkedin_job_details(linkedin_url: str) -> JobDetails:
         await provider.aclose()
 
 
-async def _fetch_generic_job_details(job_url: str) -> JobDetails:
+def _fetch_generic_job_details(job_url: str) -> JobDetails:
     settings = load_settings()
-    return await fetch_generic_job_details(
-        url=job_url,
+    html = fetch_generic_html(
+        job_url,
         user_agent=settings.user_agent,
         timeout_seconds=settings.timeout_seconds,
     )
+    return extract_generic_job_details_from_html(html=html, url=job_url)
 
 
 def _clean_prompt_job_description(description: str) -> str:
@@ -2599,6 +2637,7 @@ def _run_make_command(
     process = subprocess.Popen(  # noqa: S603
         command,
         cwd=_project_root(),
+        env={**os.environ, **_RUNTIME_PROCESS_ENV},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -2830,6 +2869,8 @@ def _extract_seeded_job_ids(output: str) -> list[str]:
 
 
 def _project_root() -> Path:
+    if _RUNTIME_PROJECT_ROOT is not None:
+        return _RUNTIME_PROJECT_ROOT
     candidate = Path(__file__).resolve().parents[2]
     if (candidate / "Makefile").is_file():
         return candidate
@@ -2997,6 +3038,8 @@ def create_app(
     *,
     database_path: Path,
     output_dir: Path,
+    download_dir: Path,
+    resume_template_path: Path,
     background_action_runner: BackgroundActionRunner | None = None,
 ):
     from flask import (
@@ -3074,7 +3117,7 @@ def create_app(
             )
             connection.commit()
         if applied_to == "Yes":
-            deleted_count = cleanup_downloaded_application_pdfs()
+            deleted_count = cleanup_downloaded_application_pdfs(download_dir)
             flash(f"Application updated. Cleared {deleted_count} downloaded PDF file(s).")
         else:
             flash("Application updated.")
@@ -3175,7 +3218,7 @@ def create_app(
                         linkedin_url=url,
                     )
                 )
-            except (ValueError, LinkedInCareerMcpError) as exc:
+            except (ValueError, CareerAgentWorkbenchError) as exc:
                 failures.append((url, str(exc)))
         job_ids = _selected_job_ids(job_ids)
         if not job_ids:
@@ -3239,7 +3282,7 @@ def create_app(
                         job_url=url,
                     )
                 )
-            except (ValueError, LinkedInCareerMcpError) as exc:
+            except (ValueError, CareerAgentWorkbenchError) as exc:
                 failures.append((url, str(exc)))
         job_ids = _selected_job_ids(job_ids)
         if not job_ids:
@@ -3486,6 +3529,7 @@ def create_app(
                 database_path=database_path,
                 job_id=job_id,
                 application_resume_object=updated_aro,
+                template_path=resume_template_path,
             )
         except (TypeError, ValueError, yaml.YAMLError) as exc:
             flash(f"Resume save failed: {exc}")
@@ -3500,6 +3544,7 @@ def create_app(
             score = revert_application_resume_edit(
                 database_path=database_path,
                 job_id=job_id,
+                template_path=resume_template_path,
             )
         except ValueError as exc:
             flash(str(exc))
@@ -3514,6 +3559,7 @@ def create_app(
             score = sync_application_resume_to_draft(
                 database_path=database_path,
                 job_id=job_id,
+                template_path=resume_template_path,
             )
         except (TypeError, ValueError, yaml.YAMLError) as exc:
             flash(f"Draft sync failed: {exc}")
@@ -3543,11 +3589,14 @@ def create_app(
             destination = copy_application_artifact_to_downloads(
                 row=row,
                 artifact_kind="resume",
+                download_dir=download_dir,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             flash(f"Resume copy failed: {exc}")
         else:
-            flash(f"Copied resume to {_download_display_path(destination)}.")
+            flash(
+                f"Copied resume to {_download_display_path(destination, download_dir)}."
+            )
         return redirect_to_index_state()
 
     @app.get("/cover-letters/<job_id>/edit")
@@ -3618,11 +3667,15 @@ def create_app(
             destination = copy_application_artifact_to_downloads(
                 row=row,
                 artifact_kind="cover_letter",
+                download_dir=download_dir,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             flash(f"Cover letter copy failed: {exc}")
         else:
-            flash(f"Copied cover letter to {_download_display_path(destination)}.")
+            flash(
+                "Copied cover letter to "
+                f"{_download_display_path(destination, download_dir)}."
+            )
         return redirect_to_index_state()
 
     @app.get("/descriptions/<job_id>")
@@ -3668,22 +3721,10 @@ def create_app(
     return app
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Launch the local LinkedIn application tracker.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    parser.add_argument("--database", default="")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--open-browser", action="store_true")
-    args = parser.parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    from career_agent_workbench.webapp_archive_runtime import main as runtime_main
 
-    output_dir = Path(args.output_dir)
-    database_path = Path(args.database) if args.database else output_dir / DEFAULT_DATABASE
-    app = create_app(database_path=database_path, output_dir=output_dir)
-    if args.open_browser:
-        _schedule_browser_open(host=args.host, port=args.port)
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    return runtime_main(argv)
 
 
 def _fetch_applications(
@@ -4383,8 +4424,8 @@ def _add_application_return_path(return_to: Any) -> str:
     return f"/applications/add?{query}"
 
 
-def cleanup_downloaded_application_pdfs(download_dir: Path | None = None) -> int:
-    target_dir = download_dir or Path.home() / "Downloads"
+def cleanup_downloaded_application_pdfs(download_dir: Path) -> int:
+    target_dir = download_dir
     if not target_dir.is_dir():
         return 0
 
@@ -4404,7 +4445,7 @@ def copy_application_artifact_to_downloads(
     *,
     row: sqlite3.Row,
     artifact_kind: str,
-    download_dir: Path | None = None,
+    download_dir: Path,
 ) -> Path:
     if artifact_kind == "resume":
         filename_column = "resume_filename"
@@ -4417,7 +4458,7 @@ def copy_application_artifact_to_downloads(
     else:
         raise ValueError(f"Unsupported artifact kind: {artifact_kind}")
 
-    target_dir = download_dir or Path.home() / "Downloads"
+    target_dir = download_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     filename = Path(str(row[filename_column] or "")).name
@@ -4432,11 +4473,10 @@ def copy_application_artifact_to_downloads(
     return destination
 
 
-def _download_display_path(path: Path) -> str:
-    downloads_dir = Path.home() / "Downloads"
-    if path.parent == downloads_dir:
-        return f"~/Downloads/{path.name}"
-    return str(path)
+def _download_display_path(path: Path, download_dir: Path) -> str:
+    if path.parent != download_dir:
+        raise ValueError("Downloaded application artifact path is invalid.")
+    return f"configured downloads/{path.name}"
 
 
 def _display_date(value: Any) -> str:

@@ -11,6 +11,10 @@
 - Imported the bound archived Flask module byte-for-byte as an inactive,
   packaged source baseline so activation work can be measured against an exact
   UI and route implementation without copying private runtime state.
+- Activated the archived 31-route Flask application through a thin public
+  runtime boundary that preserves its inline frontend while resolving the
+  external database, output, downloads, packaged resume template, operator
+  lifecycle, and background-command paths safely.
 
 ## [1.2.0] - In progress
 

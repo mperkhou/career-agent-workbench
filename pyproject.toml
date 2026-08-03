@@ -44,7 +44,7 @@ career-agent-workbench = "career_agent_workbench.__main__:main"
 career-agent-workbench-audit-jods = "career_agent_workbench.jod_cleaner_audit:main"
 career-agent-workbench-refine-resume = "career_agent_workbench.resume_refinement_cli:main"
 career-agent-workbench-seed-jobs = "career_agent_workbench.workflows.matching:main"
-career-agent-workbench-webapp = "career_agent_workbench.webapp:main"
+career-agent-workbench-webapp = "career_agent_workbench.webapp_archive_runtime:main"
 career-agent-workbench-mcp = "career_agent_workbench.server:main"
 
 [tool.hatch.build.targets.wheel]
@@ -126,6 +126,7 @@ include = [
   "/src/career_agent_workbench/tools/jobs.py",
   "/src/career_agent_workbench/tools/matching.py",
   "/src/career_agent_workbench/webapp.py",
+  "/src/career_agent_workbench/webapp_archive_runtime.py",
   "/src/career_agent_workbench/webapp_actions.py",
   "/src/career_agent_workbench/webapp_artifacts.py",
   "/src/career_agent_workbench/webapp_editors.py",

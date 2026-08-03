@@ -138,6 +138,7 @@ def test_public_identifiers_and_sanitized_cli_errors_remain_safe(
 
 def _wheel(path: Path, *, prohibited: bool = False) -> None:
     members = {
+        "career_agent_workbench/_archived_flask_source.py": "",
         "career_agent_workbench/__init__.py": '__version__ = "1.0.0"\n',
         "career_agent_workbench/__main__.py": "def main(): return 0\n",
         "career_agent_workbench/cover_letter_rendering.py": "",
@@ -158,6 +159,7 @@ def _wheel(path: Path, *, prohibited: bool = False) -> None:
             "<main>Variants</main>"
         ),
         "career_agent_workbench/webapp_actions.py": "",
+        "career_agent_workbench/webapp_archive_runtime.py": "",
         "career_agent_workbench/webapp_artifacts.py": "",
         "career_agent_workbench/webapp_editors.py": "",
         "career_agent_workbench/webapp_ingestion.py": "",

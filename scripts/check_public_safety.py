@@ -116,6 +116,7 @@ _SDIST_PREFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*-\d[0-9A-Za-z._-]*")
 _WHEEL_DIST_INFO_RE = re.compile(r"career_agent_workbench-\d[^/]*\.dist-info")
 _WHEEL_REQUIRED = frozenset(
     {
+        "career_agent_workbench/_archived_flask_source.py",
         "career_agent_workbench/__init__.py",
         "career_agent_workbench/__main__.py",
         "career_agent_workbench/cover_letter_rendering.py",
@@ -128,6 +129,7 @@ _WHEEL_REQUIRED = frozenset(
         "career_agent_workbench/templates/webapp/resume_edit.html",
         "career_agent_workbench/templates/webapp/variant_review.html",
         "career_agent_workbench/webapp_actions.py",
+        "career_agent_workbench/webapp_archive_runtime.py",
         "career_agent_workbench/webapp_artifacts.py",
         "career_agent_workbench/webapp_editors.py",
         "career_agent_workbench/webapp_ingestion.py",
@@ -630,7 +632,9 @@ def installed_smoke(expected_prefix: Path) -> None:
             "career-agent-workbench-seed-jobs": (
                 "career_agent_workbench.workflows.matching:main"
             ),
-            "career-agent-workbench-webapp": "career_agent_workbench.webapp:main",
+            "career-agent-workbench-webapp": (
+                "career_agent_workbench.webapp_archive_runtime:main"
+            ),
             "career-agent-workbench-mcp": "career_agent_workbench.server:main",
         }
         installed_entries = {

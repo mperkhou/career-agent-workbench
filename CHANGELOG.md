@@ -8,6 +8,9 @@
   archived application is now the UI and route source of truth, while the
   public repository's external-workspace and PII-exclusion boundaries remain
   mandatory adapters rather than reasons to reconstruct the frontend.
+- Imported the bound archived Flask module byte-for-byte as an inactive,
+  packaged source baseline so activation work can be measured against an exact
+  UI and route implementation without copying private runtime state.
 
 ## [1.2.0] - In progress
 

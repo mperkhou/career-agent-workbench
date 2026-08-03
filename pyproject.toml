@@ -82,6 +82,7 @@ include = [
   "/pyproject.toml",
   "/src/career_agent_workbench/__init__.py",
   "/src/career_agent_workbench/__main__.py",
+  "/src/career_agent_workbench/_archived_flask_source.py",
   "/src/career_agent_workbench/api_client.py",
   "/src/career_agent_workbench/application_resume.py",
   "/src/career_agent_workbench/application_state.py",
@@ -162,6 +163,7 @@ include = [
   "/skills/master-resume-yaml/SKILL.md",
   "/tests/test_application_resume.py",
   "/tests/test_application_state.py",
+  "/tests/test_archived_flask_source.py",
   "/tests/test_ats.py",
   "/tests/test_config.py",
   "/tests/test_cover_letter_rendering.py",
@@ -204,3 +206,6 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+exclude = ["src/career_agent_workbench/_archived_flask_source.py"]

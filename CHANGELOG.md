@@ -29,6 +29,11 @@
   presence-aware Make/CLI/private-dotenv precedence, model-free effective-
   configuration checks, row isolation, and bounded content-free Flask action
   logs before any further synthetic provider run.
+- Added an offline P03D repair gate that prospectively supersedes v1/v2's
+  timeout-only retry behavior with narrowly typed transient provider retries,
+  one exact workflow-owned attempt budget, additive legacy-compatible failure
+  subtypes, and bounded correlated durable diagnostics. Manual/highlighting
+  behavior is unchanged, and another live traversal remains separately gated.
 
 ## [2.0.0] - In progress
 

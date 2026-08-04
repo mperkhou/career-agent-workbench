@@ -12,6 +12,10 @@
   full-size fictional job posting whose depth and organization are informed by
   content-free patterns from retained descriptions without copying private
   posting content or mutating private state.
+- Added an explicitly authorized synthetic live traversal through v1, v2,
+  manual review, and highlighting so README examples and replacement Flask
+  illustrations can use reviewed stored outputs instead of invented workflow
+  results, while keeping the deterministic offline demo unchanged.
 
 ## [2.0.0] - In progress
 

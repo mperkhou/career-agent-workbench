@@ -57,6 +57,15 @@ from career_agent_workbench.resume_rendering import (
     sanitize_resume_rich_text,
 )
 from career_agent_workbench.webapp_ingestion import fetch_generic_html
+from career_agent_workbench.workflow_status import (
+    MAX_STATUS_EVENTS,
+    MAX_STATUS_RUNS,
+    WorkflowStatusError,
+    WorkflowStatusStore,
+    captured_diagnostic_event,
+    local_status_event,
+    status_event_message,
+)
 
 DEFAULT_OUTPUT_DIR = Path("output")
 DEFAULT_DATABASE = Path("tracking/applications.sqlite3")
@@ -141,8 +150,8 @@ RESUME_BODY_COLOR = HexColor("#111827")
 COVER_LETTER_BODY_FONT_SIZE = 9
 COVER_LETTER_BODY_LEADING = 11.5
 COVER_LETTER_PARAGRAPH_SPACE_AFTER = 7
-MAX_ACTION_RUNS = 8
-MAX_ACTION_MESSAGES = 160
+MAX_ACTION_RUNS = MAX_STATUS_RUNS
+MAX_ACTION_MESSAGES = MAX_STATUS_EVENTS
 DEFAULT_SEED_MAX_JOBS = 5
 MAX_SEED_JOBS_FROM_UI = 50
 DEFAULT_SEED_DATE_POSTED = "past_week"
@@ -191,7 +200,7 @@ class BackgroundActionRun:
     started_at: str
     finished_at: str | None = None
     return_code: int | None = None
-    messages: list[str] = field(default_factory=list)
+    events: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -209,6 +218,7 @@ _ACTION_RUNS: dict[str, BackgroundActionRun] = {}
 _ACTION_RUN_LOCK = threading.Lock()
 _RUNTIME_PROJECT_ROOT: Path | None = None
 _RUNTIME_PROCESS_ENV: dict[str, str] = {}
+_STATUS_LOG_STORE: WorkflowStatusStore | None = None
 _RUNTIME_PATH_KEYS = {
     "CAREER_AGENT_WORKBENCH_WORKSPACE",
     "CAREER_AGENT_WORKBENCH_PROFILE_DIR",
@@ -226,6 +236,7 @@ def configure_runtime_boundaries(
     *,
     project_root: Path,
     process_env: Mapping[str, str],
+    status_tmp_dir: Path,
 ) -> None:
     """Bind public runtime paths without changing the archived UI source."""
 
@@ -238,9 +249,23 @@ def configure_runtime_boundaries(
             raise ValueError("Web application runtime path is invalid.")
         configured[key] = value
 
-    global _RUNTIME_PROCESS_ENV, _RUNTIME_PROJECT_ROOT
+    try:
+        status_store = WorkflowStatusStore(status_tmp_dir)
+        retained_runs = status_store.load()
+    except WorkflowStatusError:
+        raise ValueError("Web application workflow status is unavailable.") from None
+
+    global _RUNTIME_PROCESS_ENV, _RUNTIME_PROJECT_ROOT, _STATUS_LOG_STORE
     _RUNTIME_PROJECT_ROOT = resolved_root
     _RUNTIME_PROCESS_ENV = configured
+    _STATUS_LOG_STORE = status_store
+    with _ACTION_RUN_LOCK:
+        _ACTION_RUNS.clear()
+        for payload in retained_runs:
+            run = _background_action_run_from_payload(payload)
+            if run is not None:
+                _ACTION_RUNS[run.run_id] = run
+    _recover_interrupted_background_runs()
 
 
 def connect_database(database_path: Path) -> sqlite3.Connection:
@@ -1988,25 +2013,69 @@ def start_seed_background_action(
     return run
 
 
-def background_action_snapshots() -> list[dict[str, object]]:
+def background_action_snapshots(
+    *,
+    full: bool = False,
+    message_limit: int = 20,
+    message_offset: int = 0,
+) -> list[dict[str, object]]:
+    limit = max(1, min(message_limit, MAX_ACTION_MESSAGES))
+    offset = max(0, min(message_offset, MAX_ACTION_MESSAGES))
     with _ACTION_RUN_LOCK:
         runs = sorted(
             _ACTION_RUNS.values(),
             key=lambda run: run.started_at,
             reverse=True,
         )
-        return [
+        payloads = [_background_action_payload(run) for run in runs]
+    snapshots: list[dict[str, object]] = []
+    for payload in payloads:
+        events = payload["events"]
+        assert isinstance(events, list)
+        messages = [status_event_message(item) for item in events]
+        if full:
+            selected = messages
+            selected_offset = 0
+        else:
+            end = max(0, len(messages) - offset)
+            start = max(0, end - limit)
+            selected = messages[start:end]
+            selected_offset = len(messages) - end
+        metadata = (
+            _STATUS_LOG_STORE.metadata(str(payload["id"]))
+            if _STATUS_LOG_STORE is not None
+            else {"log_available": False, "log_event_count": 0}
+        )
+        snapshots.append(
             {
-                "id": run.run_id,
-                "title": run.title,
-                "status": run.status,
-                "started_at": run.started_at,
-                "finished_at": run.finished_at,
-                "return_code": run.return_code,
-                "messages": run.messages[-20:],
+                "id": payload["id"],
+                "title": payload["title"],
+                "status": payload["status"],
+                "started_at": payload["started_at"],
+                "finished_at": payload["finished_at"],
+                "return_code": payload["return_code"],
+                "messages": selected,
+                "message_count": len(messages),
+                "message_limit": len(messages) if full else limit,
+                "message_offset": selected_offset,
+                "full_detail": full,
+                **metadata,
             }
-            for run in runs
-        ]
+        )
+    return snapshots
+
+
+def _bounded_status_query_value(
+    value: object,
+    *,
+    default: int,
+    minimum: int = 1,
+) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError, OverflowError):
+        parsed = default
+    return max(minimum, min(parsed, MAX_ACTION_MESSAGES))
 
 
 def _create_background_action_run(*, title: str) -> BackgroundActionRun:
@@ -2019,7 +2088,8 @@ def _create_background_action_run(*, title: str) -> BackgroundActionRun:
     with _ACTION_RUN_LOCK:
         _ACTION_RUNS[run.run_id] = run
         _trim_background_action_runs_locked()
-    _append_background_action_message(run.run_id, "Queued background action.")
+    _persist_background_action_run(run)
+    _append_background_action_event(run.run_id, "queued")
     return run
 
 
@@ -2031,18 +2101,52 @@ def _trim_background_action_runs_locked() -> None:
         del _ACTION_RUNS[run.run_id]
 
 
-def _append_background_action_message(run_id: str, message: str) -> None:
-    value = " ".join(str(message).split())
-    if not value:
+def _append_background_action_event(
+    run_id: str,
+    event: str,
+    *,
+    stage: str = "workflow",
+    category: str = "none",
+    count: int | None = None,
+) -> None:
+    value = local_status_event(
+        event,
+        timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
+        stage=stage,
+        category=category,
+        count=count,
+    )
+    _append_normalized_background_event(run_id, value)
+
+
+def _append_child_diagnostic_event(run_id: str, line: str) -> None:
+    if len(line.encode("utf-8", errors="ignore")) > 4_096:
         return
-    timestamp = datetime.now(UTC).strftime("%H:%M:%S")
+    try:
+        value = captured_diagnostic_event(
+            json.loads(line),
+            timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+    except (json.JSONDecodeError, TypeError, ValueError):
+        value = None
+    if value is not None:
+        _append_normalized_background_event(run_id, value)
+
+
+def _append_normalized_background_event(
+    run_id: str,
+    value: dict[str, object],
+) -> None:
+    payload: dict[str, object] | None = None
     with _ACTION_RUN_LOCK:
         run = _ACTION_RUNS.get(run_id)
         if run is None:
             return
-        run.messages.append(f"{timestamp} {value}")
-        if len(run.messages) > MAX_ACTION_MESSAGES:
-            run.messages = run.messages[-MAX_ACTION_MESSAGES:]
+        run.events.append(value)
+        if len(run.events) > MAX_ACTION_MESSAGES:
+            run.events = run.events[-MAX_ACTION_MESSAGES:]
+        payload = _background_action_payload(run)
+    _persist_background_action_payload(payload)
 
 
 def _finish_background_action_run(
@@ -2051,6 +2155,7 @@ def _finish_background_action_run(
     status: str,
     return_code: int | None = None,
 ) -> None:
+    payload: dict[str, object] | None = None
     with _ACTION_RUN_LOCK:
         run = _ACTION_RUNS.get(run_id)
         if run is None:
@@ -2058,6 +2163,67 @@ def _finish_background_action_run(
         run.status = status
         run.return_code = return_code
         run.finished_at = datetime.now(UTC).isoformat(timespec="seconds")
+        payload = _background_action_payload(run)
+    _persist_background_action_payload(payload)
+
+
+def _background_action_payload(run: BackgroundActionRun) -> dict[str, object]:
+    return {
+        "id": run.run_id,
+        "title": run.title,
+        "status": run.status,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "return_code": run.return_code,
+        "events": [dict(event) for event in run.events],
+    }
+
+
+def _background_action_run_from_payload(
+    payload: Mapping[str, object],
+) -> BackgroundActionRun | None:
+    try:
+        events = payload["events"]
+        if not isinstance(events, list):
+            return None
+        return BackgroundActionRun(
+            run_id=str(payload["id"]),
+            title=str(payload["title"]),
+            status=str(payload["status"]),
+            started_at=str(payload["started_at"]),
+            finished_at=(
+                None if payload["finished_at"] is None else str(payload["finished_at"])
+            ),
+            return_code=(
+                None if payload["return_code"] is None else int(payload["return_code"])
+            ),
+            events=[dict(item) for item in events if isinstance(item, Mapping)],
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _persist_background_action_run(run: BackgroundActionRun) -> None:
+    _persist_background_action_payload(_background_action_payload(run))
+
+
+def _persist_background_action_payload(payload: Mapping[str, object]) -> None:
+    if _STATUS_LOG_STORE is not None:
+        _STATUS_LOG_STORE.save(payload)
+
+
+def _recover_interrupted_background_runs() -> None:
+    with _ACTION_RUN_LOCK:
+        interrupted = [
+            run.run_id for run in _ACTION_RUNS.values() if run.status == "running"
+        ]
+    for run_id in interrupted:
+        _append_background_action_event(
+            run_id,
+            "restart_recovered",
+            category="workflow",
+        )
+        _finish_background_action_run(run_id, status="failed", return_code=1)
 
 
 def _run_background_action(
@@ -2080,10 +2246,14 @@ def _run_background_action(
                 manual_pass_profile=manual_pass_profile,
             ),
         )
-        _append_background_action_message(run_id, "Background action completed.")
+        _append_background_action_event(run_id, "workflow_completion")
         _finish_background_action_run(run_id, status="completed", return_code=0)
-    except Exception as exc:
-        _append_background_action_message(run_id, f"Background action failed: {exc}")
+    except Exception:
+        _append_background_action_event(
+            run_id,
+            "workflow_failure",
+            category="unexpected",
+        )
         _finish_background_action_run(run_id, status="failed", return_code=1)
 
 
@@ -2146,15 +2316,12 @@ def _run_seed_workflow_action(
         )
         job_ids = _extract_seeded_job_ids(seed_output)
         if not job_ids:
-            _append_background_action_message(
+            _append_background_action_event(
                 run_id,
-                "Seed command returned no new job IDs; skipping selected workflow steps.",
+                "seed_empty",
+                stage="seed",
             )
         elif run_v1 or run_v2 or run_manual or run_highlight:
-            _append_background_action_message(
-                run_id,
-                f"Seeded job IDs: {' '.join(job_ids)}",
-            )
             _run_job_workflow_stages(
                 run_id=run_id,
                 job_ids=job_ids,
@@ -2167,14 +2334,19 @@ def _run_seed_workflow_action(
                 ),
             )
         else:
-            _append_background_action_message(
+            _append_background_action_event(
                 run_id,
-                "Seed-only workflow selected; no resume actions requested.",
+                "stage_completion",
+                stage="seed",
             )
-        _append_background_action_message(run_id, "Seed workflow completed.")
+        _append_background_action_event(run_id, "workflow_completion")
         _finish_background_action_run(run_id, status="completed", return_code=0)
-    except Exception as exc:
-        _append_background_action_message(run_id, f"Seed workflow failed: {exc}")
+    except Exception:
+        _append_background_action_event(
+            run_id,
+            "workflow_failure",
+            category="unexpected",
+        )
         _finish_background_action_run(run_id, status="failed", return_code=1)
 
 
@@ -2194,9 +2366,12 @@ def _run_job_workflow_stages(
     for stage in stages:
         if not active_job_ids:
             break
-        _append_background_action_message(
+        status_stage = _background_status_stage(stage)
+        _append_background_action_event(
             run_id,
-            f"Starting {stage.label} for {len(active_job_ids)} active job(s).",
+            "stage_start",
+            stage=status_stage,
+            count=len(active_job_ids),
         )
         succeeded: list[str] = []
         for job_id in active_job_ids:
@@ -2206,40 +2381,39 @@ def _run_job_workflow_stages(
                     stage=stage,
                     job_id=job_id,
                 )
-            except Exception as exc:
+            except Exception:
                 failures.append(
                     {
                         "job_id": job_id,
                         "stage": stage.label,
-                        "error": str(exc),
                     }
                 )
-                _append_background_action_message(
+                _append_background_action_event(
                     run_id,
-                    f"[{job_id}] {stage.label} failed: {exc}",
+                    "stage_failure",
+                    stage=status_stage,
+                    category="workflow",
                 )
                 continue
             succeeded.append(job_id)
         active_job_ids = succeeded
+        if succeeded:
+            _append_background_action_event(
+                run_id,
+                "stage_completion",
+                stage=status_stage,
+            )
 
     if failures and not active_job_ids:
-        first_failure = failures[0]
         raise RuntimeError(
-            "All workflow jobs failed before completing every requested stage. "
-            f"First failure: {first_failure['job_id']} "
-            f"{first_failure['stage']}: {first_failure['error']}"
+            "All workflow jobs failed before completing every requested stage."
         )
     if failures:
-        _append_background_action_message(
+        _append_background_action_event(
             run_id,
-            (
-                "Background workflow completed with partial failures: "
-                f"{len(active_job_ids)} succeeded, {len(failures)} failed stage(s)."
-            ),
-        )
-        _append_background_action_message(
-            run_id,
-            f"Completed job IDs: {' '.join(active_job_ids)}",
+            "partial_failure",
+            category="workflow",
+            count=len(failures),
         )
 
 
@@ -2273,6 +2447,17 @@ def _run_background_workflow_stage(
     )
 
 
+def _background_status_stage(stage: BackgroundWorkflowStage) -> str:
+    if stage.highlight_variant_key is not None:
+        return "highlight"
+    return {
+        "draft_resumes": "v1",
+        "refine_drafts": "v2",
+        "manual_pass": "manual",
+        "highlight_drafts": "highlight",
+    }.get(stage.regenerate_mode or "", "workflow")
+
+
 def _run_make_command(
     *,
     run_id: str,
@@ -2282,7 +2467,6 @@ def _run_make_command(
     completion_message: str,
     collect_output: bool = False,
 ) -> str:
-    _append_background_action_message(run_id, f"Running {' '.join(command)}")
     process = subprocess.Popen(  # noqa: S603
         command,
         cwd=_project_root(),
@@ -2298,11 +2482,11 @@ def _run_make_command(
     for line in process.stdout:
         if collect_output:
             collected_output.append(line)
-        _append_background_action_message(run_id, line)
+        _append_child_diagnostic_event(run_id, line)
     return_code = process.wait()
     if return_code != 0:
         raise RuntimeError(f"{failure_label} exited with status {return_code}")
-    _append_background_action_message(run_id, completion_message)
+    del completion_message
     return "".join(collected_output)
 
 
@@ -2317,7 +2501,7 @@ def _regenerate_make_command(
         raise ValueError(f"Unsupported regeneration mode: {regenerate_mode}")
     if not job_ids:
         raise ValueError("At least one job id is required for regeneration.")
-    command = ["make", target, f"JOB_IDS={' '.join(job_ids)}"]
+    command = ["make", "--silent", target, f"JOB_IDS={' '.join(job_ids)}"]
     if regenerate_mode in _DRAFT_REGENERATE_MODES:
         command.append("FIRST_DRAFT_FORCE=1")
     if regenerate_mode == "manual_pass":
@@ -2333,7 +2517,12 @@ def _highlight_make_command(
 ) -> list[str]:
     if not job_ids:
         raise ValueError("At least one job id is required for Codex highlighting.")
-    command = ["make", "highlight-draft-resumes", f"JOB_IDS={' '.join(job_ids)}"]
+    command = [
+        "make",
+        "--silent",
+        "highlight-draft-resumes",
+        f"JOB_IDS={' '.join(job_ids)}",
+    ]
     if variant_key:
         command.append(f"HIGHLIGHT_RESUME_VARIANT={variant_key}")
     return command
@@ -2485,7 +2674,13 @@ def _seed_make_command(*, max_jobs: int, date_posted: str) -> list[str]:
         raise ValueError("Seed job count must be at least 1.")
     if date_posted not in _seed_date_posted_values():
         raise ValueError(f"Unsupported seed date posted filter: {date_posted}")
-    return ["make", "seed-jobs", f"MAX_JOBS={max_jobs}", f"DATE_POSTED={date_posted}"]
+    return [
+        "make",
+        "--silent",
+        "seed-jobs",
+        f"MAX_JOBS={max_jobs}",
+        f"DATE_POSTED={date_posted}",
+    ]
 
 
 def _extract_seeded_job_ids(output: str) -> list[str]:
@@ -3005,7 +3200,28 @@ def create_app(
 
     @app.get("/actions/status")
     def action_status():
-        return jsonify({"runs": background_action_snapshots()})
+        full = str(request.args.get("detail") or "").strip().casefold() == "full"
+        limit = _bounded_status_query_value(
+            request.args.get("limit"),
+            default=20,
+        )
+        offset = _bounded_status_query_value(
+            request.args.get("offset"),
+            default=0,
+            minimum=0,
+        )
+        return jsonify(
+            {
+                "runs": background_action_snapshots(
+                    full=full,
+                    message_limit=limit,
+                    message_offset=offset,
+                ),
+                "detail": "full" if full else "page",
+                "limit": MAX_ACTION_MESSAGES if full else limit,
+                "offset": 0 if full else offset,
+            }
+        )
 
     @app.post("/applications/delete")
     def bulk_delete_applications():

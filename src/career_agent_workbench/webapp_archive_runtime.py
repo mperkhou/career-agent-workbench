@@ -78,6 +78,7 @@ def create_app(runtime: RuntimeConfig, *, project_root: Path | None = None) -> F
     database_path = paths.require(WorkspaceMember.DATABASE)
     output_dir = paths.require(WorkspaceMember.OUTPUT_DIR)
     download_dir = paths.require(WorkspaceMember.DOWNLOAD_DIR)
+    tmp_dir = paths.require(WorkspaceMember.TMP_DIR)
     bound_root = _project_root(project_root)
     template_path = _packaged_resume_template()
     state_store = ApplicationStateStore(paths)
@@ -93,6 +94,7 @@ def create_app(runtime: RuntimeConfig, *, project_root: Path | None = None) -> F
     archived.configure_runtime_boundaries(
         project_root=bound_root,
         process_env=_runtime_process_env(runtime),
+        status_tmp_dir=tmp_dir,
     )
     app = archived.create_app(
         database_path=database_path,
@@ -149,6 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 WorkspaceMember.DATABASE,
                 WorkspaceMember.OUTPUT_DIR,
                 WorkspaceMember.DOWNLOAD_DIR,
+                WorkspaceMember.TMP_DIR,
             ),
         )
         app = create_app(runtime, project_root=args.project_root)

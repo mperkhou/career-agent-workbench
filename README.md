@@ -507,7 +507,7 @@ The tracker supports:
 - Add/Seed, guest LinkedIn URL ingestion, and bounded generic public-URL
   ingestion;
 - selected-row execution of allowlisted Make workflows, sequential progress,
-  bounded background history, and retryable failure presentation;
+  bounded restart-safe background history, and timeout-retry presentation;
 - exact selected or named-variant resume HTML/PDF views, download, configured
   copy, comparison, explicit selection, and automatic-selection reset;
 - revision-guarded structured resume editing, save, revert, ARO sync, and
@@ -516,6 +516,17 @@ The tracker supports:
 - CLO editing, sanitized preview, deterministic PDF, download, and configured
   copy; and
 - archive, unarchive, and referentially coherent deletion.
+
+The compact status panel renders the latest eight messages from the default
+20-message status response. The existing route also exposes older retained
+events: use `/actions/status?limit=20&offset=20` for the preceding page or
+`/actions/status?detail=full` for the complete bounded run history. Status
+records contain only closed configuration, attempt, timing, timeout, decision,
+and completion/failure events. They are stored beneath the configured external
+workspace `TMP_DIR` with an eight-run/160-event retention bound; the response
+reports availability and event counts, never a filesystem path. Raw Make
+commands, child output, prompts, responses, job IDs, and exception text are not
+persisted.
 
 GET presentation routes read application state without mutating it, while
 state changes use POST routes and the canonical state layer where adapted. One
@@ -663,6 +674,62 @@ settings. Presence-aware workflow overrides take precedence over shared Codex
 settings. Manual profiles are logical public policies: `economy` uses Terra at
 high reasoning, `regular` uses Sol at high reasoning, and `premium` uses Sol at
 extra-high reasoning unless explicit private overrides are supplied.
+
+### Effective workflow execution settings
+
+The model-assisted resume workflows use these public effective defaults:
+
+| Workflow | Model policy | Timeout per call/process | Retry count | Total attempts |
+| --- | --- | ---: | ---: | ---: |
+| v1 core/JOD/experience | Provider-specific configured models | 300 seconds | 1 | 2 |
+| v2 critique | Provider-specific second-pass model | 600 seconds | 1 | 2 |
+| Manual pass | `regular` = Sol/high, `economy` = Terra/high, `premium` = Sol/xhigh | 900 seconds | 1 | 2 |
+| Highlighting | Luna/high | 900 seconds | 1 | 2 |
+
+A retry count is the number of retries after the initial attempt, so a retry
+count of `2` allows three total attempts. v1 and v2 retry only typed provider
+timeouts. Manual pass and highlighting retry only a Codex subprocess timeout.
+Nonzero exits, missing or invalid output, parsing/schema, policy or evidence
+rejection, rendering, ATS, state, artifact, and configuration failures fail
+that row without consuming another workflow attempt. Batch commands keep later
+rows isolated and preserve earlier successful writes.
+
+Each workflow has a configuration-only preflight that resolves normal CLI,
+Make, process-environment, private-dotenv, compatibility, and default layers,
+then exits before opening state, creating a model client, or starting Codex:
+
+```bash
+make generate-draft-resumes CONFIG_ONLY=1
+make refine-draft-resumes CONFIG_ONLY=1
+make manual-pass-resumes CONFIG_ONLY=1
+make highlight-draft-resumes CONFIG_ONLY=1
+```
+
+The final aggregate JSON remains on stdout; sanitized configuration and attempt
+events go to stderr. Configuration events report only the stage, approved model
+label, reasoning effort or `inherit`, timeout, retry and total-attempt counts,
+source layer (`cli`, `make`, `process`, `private_dotenv`, or `default`), and a
+workspace-configured boolean.
+
+Make passes the six unprefixed workflow knobs
+`FIRST_DRAFT_LLM_TIMEOUT_SECONDS`, `FIRST_DRAFT_LLM_RETRIES`,
+`SECOND_PASS_TIMEOUT_SECONDS`, `SECOND_PASS_RETRIES`, `CODEX_TIMEOUT_SECONDS`,
+and `CODEX_RETRIES` as explicit command flags, including for Flask-launched
+nested Make runs. Consequently, a prefixed compatibility timeout/retry value
+does not override those explicit Make flags. Workflow-specific model and effort
+values precede shared Codex values. An explicitly present empty reasoning
+effort means inherit the Codex CLI setting; an empty model does not create a
+model override.
+
+Direct manual-pass and highlighting invocations resolve timeout and retry
+fallbacks from `CAREER_AGENT_WORKBENCH_CODEX_TIMEOUT_SECONDS` and
+`CAREER_AGENT_WORKBENCH_CODEX_RETRIES`; the legacy
+`LINKEDIN_CAREER_MCP_...` forms remain compatibility fallbacks. Explicit CLI
+flags are stronger, and Make always supplies those flags from its unprefixed
+`CODEX_TIMEOUT_SECONDS` and `CODEX_RETRIES` values. The v1/v2 scripts retain
+their established direct interfaces: provider timeout settings may come from
+the existing API/Ollama environment fields, while their workflow retry count
+is an explicit flag or the public default.
 
 Configuration never makes a request merely by loading. The following actions
 are offline: help/version parsing, MRO loading, deterministic JOD cleanup,

@@ -188,6 +188,79 @@ def emit_diagnostic(
     target.flush()
 
 
+def sanitized_diagnostic_event(value: object) -> dict[str, object] | None:
+    """Return a defensive copy of one valid emitted event, else ``None``."""
+
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        event = DiagnosticEvent(value.get("event"))
+        stage = WorkflowStage(value.get("stage"))
+    except (TypeError, ValueError):
+        return None
+    if event is DiagnosticEvent.CONFIGURATION:
+        expected = {
+            "event",
+            "stage",
+            "model",
+            "effort",
+            "timeout_seconds",
+            "retry_count",
+            "total_attempts",
+            "sources",
+            "workspace_configured",
+        }
+        if "profile" in value:
+            expected.add("profile")
+        if set(value) != expected:
+            return None
+        try:
+            normalized = configuration_event(
+                stage=stage,
+                model=value["model"],
+                effort=("" if value["effort"] == "inherit" else value["effort"]),
+                timeout_seconds=value["timeout_seconds"],
+                retry_count=value["retry_count"],
+                sources=value["sources"],
+                workspace_configured=value["workspace_configured"],
+                profile=value.get("profile"),
+            )
+        except (TypeError, ValueError):
+            return None
+        return (
+            normalized
+            if normalized.get("total_attempts") == value["total_attempts"]
+            else None
+        )
+
+    allowed = {"event", "stage", "attempt", "total_attempts"}
+    if "elapsed_seconds" in value:
+        allowed.add("elapsed_seconds")
+    if "retry" in value:
+        allowed.add("retry")
+    if "category" in value:
+        allowed.add("category")
+    if set(value) != allowed:
+        return None
+    try:
+        normalized = attempt_event(
+            event=event,
+            stage=stage,
+            attempt=value["attempt"],
+            total_attempts=value["total_attempts"],
+            elapsed_seconds=value.get("elapsed_seconds"),
+            retry=value.get("retry"),
+            category=(
+                None
+                if value.get("category") is None
+                else FailureCategory(value["category"])
+            ),
+        )
+    except (TypeError, ValueError):
+        return None
+    return normalized
+
+
 def _safe_label(value: object) -> bool:
     return bool(
         type(value) is str
@@ -211,4 +284,5 @@ __all__ = [
     "configuration_event",
     "emit_diagnostic",
     "invocation_argument_source",
+    "sanitized_diagnostic_event",
 ]

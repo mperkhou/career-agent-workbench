@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import json
 import sqlite3
 import tomllib
 from pathlib import Path
@@ -17,6 +18,11 @@ from career_agent_workbench.application_state import (
 )
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
 from career_agent_workbench.webapp_archive_runtime import create_app
+from career_agent_workbench.workflow_diagnostics import (
+    ConfigurationSource,
+    WorkflowStage,
+    configuration_event,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "career_agent_workbench" / "_archived_flask_source.py"
@@ -385,3 +391,158 @@ def test_archived_runtime_is_the_packaged_console_entrypoint() -> None:
     assert "/src/career_agent_workbench/_archived_flask_source.py" in included
     assert "/src/career_agent_workbench/webapp_archive_runtime.py" in included
     assert "/tests/test_archived_flask_source.py" in included
+
+
+def test_archived_status_route_supports_default_full_and_pagination(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    app = create_app(runtime, project_root=ROOT)
+    run = archived._create_background_action_run(title="Synthetic background action")
+    for _index in range(30):
+        archived._append_background_action_event(
+            run.run_id,
+            "stage_completion",
+            stage="v1",
+        )
+
+    client = app.test_client()
+    default = client.get("/actions/status").get_json()
+    full = client.get("/actions/status?detail=full").get_json()
+    page = client.get("/actions/status?limit=5&offset=20").get_json()
+    assert default["detail"] == "page"
+    assert default["limit"] == 20
+    assert len(default["runs"][0]["messages"]) == 20
+    assert default["runs"][0]["message_count"] == 31
+    assert default["runs"][0]["log_available"] is True
+    assert default["runs"][0]["log_event_count"] == 31
+    assert full["detail"] == "full"
+    assert len(full["runs"][0]["messages"]) == 31
+    assert page["runs"][0]["message_offset"] == 20
+    assert len(page["runs"][0]["messages"]) == 5
+    assert str(runtime.paths.tmp_dir) not in json.dumps(full)
+    assert b"(run.messages || []).slice(-8)" in client.get("/").data
+
+
+def test_archived_status_logs_survive_restart_and_recover_interruption(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    app = create_app(runtime, project_root=ROOT)
+    completed = archived._create_background_action_run(title="Completed action")
+    archived._append_background_action_event(
+        completed.run_id,
+        "workflow_completion",
+    )
+    archived._finish_background_action_run(
+        completed.run_id,
+        status="completed",
+        return_code=0,
+    )
+    interrupted = archived._create_background_action_run(title="Interrupted action")
+
+    archived._ACTION_RUNS.clear()
+    restarted = create_app(runtime, project_root=ROOT)
+    payload = restarted.test_client().get("/actions/status?detail=full").get_json()
+    by_id = {item["id"]: item for item in payload["runs"]}
+    assert by_id[completed.run_id]["status"] == "completed"
+    assert by_id[completed.run_id]["log_available"] is True
+    assert by_id[interrupted.run_id]["status"] == "failed"
+    assert any(
+        "recovered after restart" in message
+        for message in by_id[interrupted.run_id]["messages"]
+    )
+    assert len(
+        [rule for rule in app.url_map.iter_rules() if rule.endpoint != "static"]
+    ) == len(
+        [rule for rule in restarted.url_map.iter_rules() if rule.endpoint != "static"]
+    )
+
+
+def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    create_app(runtime, project_root=ROOT)
+    run = archived._create_background_action_run(title="Synthetic action")
+    diagnostic = configuration_event(
+        stage=WorkflowStage.V1_CORE,
+        model="synthetic/model",
+        effort="",
+        timeout_seconds=300,
+        retry_count=2,
+        sources={
+            "model": ConfigurationSource.MAKE,
+            "effort": ConfigurationSource.DEFAULT,
+            "timeout": ConfigurationSource.MAKE,
+            "retry_count": ConfigurationSource.MAKE,
+        },
+        workspace_configured=True,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        stdout = iter(
+            (
+                f"{json.dumps(diagnostic)}\n",
+                "RAW /private/operator/path prompt response secret-marker\n",
+            )
+        )
+
+        @staticmethod
+        def wait() -> int:
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["environment"] = kwargs["env"]
+        return FakeProcess()
+
+    for key, value in {
+        "FIRST_DRAFT_LLM_TIMEOUT_SECONDS": "301",
+        "FIRST_DRAFT_LLM_RETRIES": "2",
+        "SECOND_PASS_TIMEOUT_SECONDS": "601",
+        "SECOND_PASS_RETRIES": "2",
+        "CODEX_TIMEOUT_SECONDS": "901",
+        "CODEX_RETRIES": "2",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(archived.subprocess, "Popen", fake_popen)
+    command = archived._regenerate_make_command(
+        regenerate_mode="draft_resumes",
+        job_ids=["synthetic-job"],
+    )
+    archived._run_make_command(
+        run_id=run.run_id,
+        command=command,
+        output_stream_error="synthetic stream failure",
+        failure_label="synthetic command",
+        completion_message="synthetic completion",
+    )
+
+    assert captured["command"][0:2] == ["make", "--silent"]
+    environment = captured["environment"]
+    assert isinstance(environment, dict)
+    assert environment["FIRST_DRAFT_LLM_TIMEOUT_SECONDS"] == "301"
+    assert environment["FIRST_DRAFT_LLM_RETRIES"] == "2"
+    assert environment["SECOND_PASS_TIMEOUT_SECONDS"] == "601"
+    assert environment["SECOND_PASS_RETRIES"] == "2"
+    assert environment["CODEX_TIMEOUT_SECONDS"] == "901"
+    assert environment["CODEX_RETRIES"] == "2"
+    rendered = json.dumps(
+        archived.background_action_snapshots(full=True),
+        sort_keys=True,
+    )
+    assert "synthetic/model" in rendered
+    assert "--:--:--" not in rendered
+    assert "secret-marker" not in rendered
+    assert "operator/path" not in rendered
+    assert "synthetic-job" not in rendered
+    persisted = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (runtime.paths.tmp_dir / "workflow-status").glob("*.json")
+    )
+    assert "secret-marker" not in persisted
+    assert "operator/path" not in persisted
+    assert "synthetic-job" not in persisted

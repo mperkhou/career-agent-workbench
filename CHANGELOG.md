@@ -17,6 +17,9 @@
   illustrations can use reviewed stored outputs instead of invented workflow
   results, while keeping the deterministic offline demo unchanged and retaining
   the four final variant snapshots outside Git for later example review.
+- Added a pre-call compatibility repair requirement so public v1, ARO
+  regeneration, v2, and highlighting batch readers use the canonical bounded
+  application-query maximum instead of an invalid oversized literal.
 
 ## [2.0.0] - In progress
 

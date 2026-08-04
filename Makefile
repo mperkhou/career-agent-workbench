@@ -40,18 +40,16 @@ SECOND_PASS_TIMEOUT_SECONDS ?= 600
 SECOND_PASS_RETRIES ?= 1
 CODEX_COMMAND ?= codex
 CODEX_MODEL ?=
-CODEX_REASONING_EFFORT ?=
 CODEX_TIMEOUT_SECONDS ?= 900
 CODEX_RETRIES ?= 1
 MANUAL_PASS_PROFILE ?= regular
 MANUAL_PASS_CODEX_MODEL ?=
-MANUAL_PASS_CODEX_REASONING_EFFORT ?=
 HIGHLIGHT_CODEX_MODEL ?=
-HIGHLIGHT_CODEX_REASONING_EFFORT ?=
 HIGHLIGHT_RESUME_VARIANT ?=
 HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET ?=
 HIGHLIGHT_EXPERIENCE_COMPANY ?=
 HIGHLIGHT_EXPERIENCE_JOB_ORDER ?=
+CONFIG_ONLY ?=
 
 workspace_flag = $(if $(strip $(WORKSPACE)),--workspace "$(WORKSPACE)")
 database_flag = $(if $(strip $(DATABASE)),--database "$(DATABASE)")
@@ -66,8 +64,11 @@ batch_job_flags = $(if $(filter all,$(strip $(JOB_IDS))),,$(foreach id,$(strip $
 refine_job_flags = $(if $(filter all,$(strip $(JOB_IDS))),--all-active,$(if $(strip $(JOB_IDS)),$(foreach id,$(strip $(JOB_IDS)),--job-id "$(id)"),--all-active))
 manual_job_flags = $(if $(filter all,$(strip $(JOB_IDS))),,$(foreach id,$(strip $(JOB_IDS)),--job-id "$(id)"))
 manual_model_flag = $(if $(strip $(MANUAL_PASS_CODEX_MODEL)),--codex-model "$(MANUAL_PASS_CODEX_MODEL)",$(if $(strip $(CODEX_MODEL)),--codex-model "$(CODEX_MODEL)"))
-manual_effort_flag = $(if $(strip $(MANUAL_PASS_CODEX_REASONING_EFFORT)),--codex-reasoning-effort "$(MANUAL_PASS_CODEX_REASONING_EFFORT)",$(if $(strip $(CODEX_REASONING_EFFORT)),--codex-reasoning-effort "$(CODEX_REASONING_EFFORT)"))
+manual_effort_flag = $(if $(filter undefined,$(origin MANUAL_PASS_CODEX_REASONING_EFFORT)),$(if $(filter undefined,$(origin CODEX_REASONING_EFFORT)),,--codex-reasoning-effort "$(CODEX_REASONING_EFFORT)"),--codex-reasoning-effort "$(MANUAL_PASS_CODEX_REASONING_EFFORT)")
+highlight_effort_flag = $(if $(filter undefined,$(origin HIGHLIGHT_CODEX_REASONING_EFFORT)),$(if $(filter undefined,$(origin CODEX_REASONING_EFFORT)),,--codex-reasoning-effort "$(CODEX_REASONING_EFFORT)"),--codex-reasoning-effort "$(HIGHLIGHT_CODEX_REASONING_EFFORT)")
 first_draft_force_flag = $(if $(filter 1 true,$(strip $(FIRST_DRAFT_FORCE))),--force)
+config_only_flag = $(if $(filter 1 true,$(strip $(CONFIG_ONLY))),--config-only)
+workflow_invocation_marker = CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE=make
 highlight_span_flag = $(if $(strip $(HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET)),--max-strong-spans-per-bullet "$(HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET)")
 highlight_company_flag = $(if $(strip $(HIGHLIGHT_EXPERIENCE_COMPANY)),--experience-company "$(HIGHLIGHT_EXPERIENCE_COMPANY)")
 highlight_job_order_flag = $(if $(strip $(HIGHLIGHT_EXPERIENCE_JOB_ORDER)),--experience-job-order "$(HIGHLIGHT_EXPERIENCE_JOB_ORDER)")
@@ -121,10 +122,10 @@ audit-jods:
 	$(AUDIT_JODS) $(workspace_flag) $(database_flag) $(output_flag)
 
 generate-draft-resumes:
-	$(PYTHON) scripts/application_resume_generate_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(template_flag) $(batch_job_flags) $(if $(strip $(CORE_SKILL_MODEL)),--api-model "$(CORE_SKILL_MODEL)") $(if $(strip $(JOD_MODEL)),--jod-model "$(JOD_MODEL)") --llm-timeout-seconds "$(FIRST_DRAFT_LLM_TIMEOUT_SECONDS)" --llm-retries "$(FIRST_DRAFT_LLM_RETRIES)"
+	$(workflow_invocation_marker) $(PYTHON) scripts/application_resume_generate_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(template_flag) $(batch_job_flags) $(config_only_flag) $(if $(strip $(CORE_SKILL_MODEL)),--api-model "$(CORE_SKILL_MODEL)") $(if $(strip $(JOD_MODEL)),--jod-model "$(JOD_MODEL)") --llm-timeout-seconds "$(FIRST_DRAFT_LLM_TIMEOUT_SECONDS)" --llm-retries "$(FIRST_DRAFT_LLM_RETRIES)"
 
 regenerate-draft-resumes:
-	$(PYTHON) scripts/application_resume_generate_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(template_flag) $(batch_job_flags) $(first_draft_force_flag) $(if $(strip $(CORE_SKILL_MODEL)),--api-model "$(CORE_SKILL_MODEL)") $(if $(strip $(JOD_MODEL)),--jod-model "$(JOD_MODEL)") --llm-timeout-seconds "$(FIRST_DRAFT_LLM_TIMEOUT_SECONDS)" --llm-retries "$(FIRST_DRAFT_LLM_RETRIES)"
+	$(workflow_invocation_marker) $(PYTHON) scripts/application_resume_generate_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(template_flag) $(batch_job_flags) $(config_only_flag) $(first_draft_force_flag) $(if $(strip $(CORE_SKILL_MODEL)),--api-model "$(CORE_SKILL_MODEL)") $(if $(strip $(JOD_MODEL)),--jod-model "$(JOD_MODEL)") --llm-timeout-seconds "$(FIRST_DRAFT_LLM_TIMEOUT_SECONDS)" --llm-retries "$(FIRST_DRAFT_LLM_RETRIES)"
 
 regenerate-resumes: regenerate-draft-resumes refine-draft-resumes
 
@@ -137,15 +138,15 @@ sync-draft-to-aro:
 	$(PYTHON) scripts/application_resume_sync_drafts_to_aro.py $(workspace_flag) $(database_flag) $(output_flag) $(batch_job_flags)
 
 refine-draft-resumes:
-	$(REFINE_RESUME) $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(template_flag) $(refine_job_flags) $(if $(strip $(SECOND_PASS_MODEL)),--api-model "$(SECOND_PASS_MODEL)") --api-timeout-seconds "$(SECOND_PASS_TIMEOUT_SECONDS)" --api-retries "$(SECOND_PASS_RETRIES)"
+	$(workflow_invocation_marker) $(REFINE_RESUME) $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(template_flag) $(if $(config_only_flag),,$(refine_job_flags)) $(config_only_flag) $(if $(strip $(SECOND_PASS_MODEL)),--api-model "$(SECOND_PASS_MODEL)") --api-timeout-seconds "$(SECOND_PASS_TIMEOUT_SECONDS)" --api-retries "$(SECOND_PASS_RETRIES)"
 
 second-pass-refinement: refine-draft-resumes
 
 highlight-draft-resumes:
-	$(PYTHON) scripts/application_resume_highlight_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(tmp_flag) $(template_flag) $(batch_job_flags) --codex-command "$(CODEX_COMMAND)" $(if $(strip $(HIGHLIGHT_CODEX_MODEL)),--codex-model "$(HIGHLIGHT_CODEX_MODEL)",$(if $(strip $(CODEX_MODEL)),--codex-model "$(CODEX_MODEL)")) $(if $(strip $(HIGHLIGHT_CODEX_REASONING_EFFORT)),--codex-reasoning-effort "$(HIGHLIGHT_CODEX_REASONING_EFFORT)",$(if $(strip $(CODEX_REASONING_EFFORT)),--codex-reasoning-effort "$(CODEX_REASONING_EFFORT)")) $(if $(strip $(HIGHLIGHT_RESUME_VARIANT)),--variant-key "$(HIGHLIGHT_RESUME_VARIANT)") $(highlight_span_flag) $(highlight_company_flag) $(highlight_job_order_flag) --timeout-seconds "$(CODEX_TIMEOUT_SECONDS)" --retry-count "$(CODEX_RETRIES)"
+	$(workflow_invocation_marker) $(PYTHON) scripts/application_resume_highlight_drafts.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(tmp_flag) $(template_flag) $(batch_job_flags) $(config_only_flag) --codex-command "$(CODEX_COMMAND)" $(if $(strip $(HIGHLIGHT_CODEX_MODEL)),--codex-model "$(HIGHLIGHT_CODEX_MODEL)",$(if $(strip $(CODEX_MODEL)),--codex-model "$(CODEX_MODEL)")) $(highlight_effort_flag) $(if $(strip $(HIGHLIGHT_RESUME_VARIANT)),--variant-key "$(HIGHLIGHT_RESUME_VARIANT)") $(highlight_span_flag) $(highlight_company_flag) $(highlight_job_order_flag) --timeout-seconds "$(CODEX_TIMEOUT_SECONDS)" --retry-count "$(CODEX_RETRIES)"
 
 manual-pass-resumes:
-	$(if $(strip $(manual_job_flags)),$(PYTHON) scripts/application_resume_manual_pass.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(tmp_flag) $(template_flag) $(manual_job_flags) --codex-command "$(CODEX_COMMAND)" --manual-pass-profile "$(MANUAL_PASS_PROFILE)" $(manual_model_flag) $(manual_effort_flag) --timeout-seconds "$(CODEX_TIMEOUT_SECONDS)" --retry-count "$(CODEX_RETRIES)",@echo "Set JOB_IDS to one or more explicit job IDs." >&2; exit 2)
+	$(if $(or $(strip $(manual_job_flags)),$(config_only_flag)),$(workflow_invocation_marker) $(PYTHON) scripts/application_resume_manual_pass.py $(workspace_flag) $(database_flag) $(output_flag) $(master_flag) $(master_text_flag) $(tmp_flag) $(template_flag) $(manual_job_flags) $(config_only_flag) --codex-command "$(CODEX_COMMAND)" --manual-pass-profile "$(MANUAL_PASS_PROFILE)" $(manual_model_flag) $(manual_effort_flag) --timeout-seconds "$(CODEX_TIMEOUT_SECONDS)" --retry-count "$(CODEX_RETRIES)",@echo "Set JOB_IDS to one or more explicit job IDs." >&2; exit 2)
 
 launch-website:
 	$(WEBAPP) $(workspace_flag) $(database_flag) $(output_flag) $(profile_flag) $(master_flag) $(master_text_flag) $(blacklist_flag) $(tmp_flag) --host "$(HOST)" --port "$(PORT)"

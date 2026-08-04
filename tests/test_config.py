@@ -257,6 +257,34 @@ def test_complete_precedence_order(
     assert loaded.settings.user_agent == expected
 
 
+def test_setting_source_layers_are_closed_and_presence_aware(tmp_path: Path) -> None:
+    assert _load(tmp_path).setting_source("highlight_codex_model") == "default"
+
+    _write_private_env(
+        tmp_path,
+        (f"{CANONICAL}HIGHLIGHT_CODEX_MODEL=private-model",),
+    )
+    assert _load(tmp_path).setting_source("highlight_codex_model") == "private_dotenv"
+    process = _load(
+        tmp_path,
+        {f"{CANONICAL}HIGHLIGHT_CODEX_MODEL": "process-model"},
+    )
+    assert process.setting_source("highlight_codex_model") == "process"
+
+    direct = _load(
+        tmp_path,
+        overrides=RuntimeOverrides(highlight_codex_model="direct-model"),
+    )
+    assert direct.setting_source("highlight_codex_model") == "cli"
+    make = _load(
+        tmp_path,
+        {"CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE": "make"},
+        RuntimeOverrides(highlight_codex_reasoning_effort=""),
+    )
+    assert make.settings.highlight_codex_reasoning_effort == ""
+    assert make.setting_source("highlight_codex_reasoning_effort") == "make"
+
+
 def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> None:
     settings = _load(tmp_path).settings
 
@@ -266,7 +294,7 @@ def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> No
     assert settings.second_pass_model == "z-ai/glm-5.2"
     assert settings.manual_pass_codex_model == ""
     assert settings.manual_pass_codex_reasoning_effort == ""
-    assert settings.highlight_codex_model == "gpt-5.6-sol"
+    assert settings.highlight_codex_model == "gpt-5.6-luna"
     assert settings.highlight_codex_reasoning_effort == "high"
 
 
@@ -289,7 +317,7 @@ def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> No
             "highlight_codex_model",
             "HIGHLIGHT_CODEX_MODEL",
             "CODEX_MODEL",
-            "gpt-5.6-sol",
+            "gpt-5.6-luna",
         ),
         (
             "highlight_codex_reasoning_effort",
@@ -322,6 +350,7 @@ def test_workflow_codex_precedence_and_shared_fallback(
     }
 
     assert getattr(_load(tmp_path).settings, field) == "private-canonical-workflow"
+    expected_blank = "" if field.endswith("reasoning_effort") else default
     assert (
         getattr(
             _load(
@@ -355,7 +384,7 @@ def test_workflow_codex_precedence_and_shared_fallback(
             ).settings,
             field,
         )
-        == default
+        == expected_blank
     )
 
 

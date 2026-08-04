@@ -14,7 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from career_agent_workbench.errors import LlmError
+from career_agent_workbench.errors import LlmError, LlmTimeoutError
 
 TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 MAX_RESPONSE_BYTES = 2_000_000
@@ -249,6 +249,8 @@ class ApiLlmClient:
                 request_error = LlmError(
                     "API LLM response exceeds the public size limit."
                 )
+            except httpx.TimeoutException:
+                request_error = LlmTimeoutError("API LLM request timed out.")
             except httpx.HTTPError:
                 request_error = LlmError("API LLM request failed.")
             if request_error is not None:

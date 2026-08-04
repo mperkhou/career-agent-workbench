@@ -6,7 +6,7 @@ import math
 import os
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from enum import StrEnum
 from io import StringIO
 from pathlib import Path
@@ -14,6 +14,11 @@ from typing import Any
 
 from dotenv import dotenv_values
 from dotenv.parser import parse_stream
+
+from career_agent_workbench.workflow_diagnostics import (
+    ConfigurationSource,
+    INVOCATION_SOURCE_ENV,
+)
 
 _CANONICAL_PREFIX = "CAREER_AGENT_WORKBENCH_"
 _COMPATIBILITY_PREFIX = "LINKEDIN_CAREER_MCP_"
@@ -174,7 +179,7 @@ class Settings:
     codex_reasoning_effort: str = ""
     manual_pass_codex_model: str = ""
     manual_pass_codex_reasoning_effort: str = ""
-    highlight_codex_model: str = "gpt-5.6-sol"
+    highlight_codex_model: str = "gpt-5.6-luna"
     highlight_codex_reasoning_effort: str = "high"
 
     def __repr__(self) -> str:
@@ -189,6 +194,16 @@ class RuntimeConfig:
     settings: Settings
     env_file: Path | None
     private_env_file: Path | None = None
+    setting_sources: tuple[tuple[str, str], ...] = dataclass_field(
+        default=(),
+        compare=False,
+        repr=False,
+    )
+
+    def setting_source(self, field: str) -> str:
+        """Return one closed source layer without exposing configuration values."""
+
+        return dict(self.setting_sources).get(field, ConfigurationSource.DEFAULT.value)
 
     def __repr__(self) -> str:
         return (
@@ -312,12 +327,17 @@ def load_runtime_config(
         root,
         invocation_cwd,
     )
-    settings = _resolve_settings(explicit, process_values, private_data)
+    settings, setting_sources = _resolve_settings(
+        explicit,
+        process_values,
+        private_data,
+    )
     return RuntimeConfig(
         paths=paths,
         settings=settings,
         env_file=env_file,
         private_env_file=private_env_file,
+        setting_sources=tuple(sorted(setting_sources.items())),
     )
 
 
@@ -558,12 +578,18 @@ def _resolve_settings(
     explicit: RuntimeOverrides,
     process_values: Mapping[str, Any],
     dotenv_data: Mapping[str, Any],
-) -> Settings:
+) -> tuple[Settings, dict[str, str]]:
     defaults = Settings()
     resolved: dict[str, str | float | int] = {}
+    sources: dict[str, str] = {}
+    explicit_source = (
+        ConfigurationSource.MAKE.value
+        if process_values.get(INVOCATION_SOURCE_ENV) == ConfigurationSource.MAKE.value
+        else ConfigurationSource.CLI.value
+    )
 
     for field, suffix in _STRING_SETTING_SPECS:
-        value, _ = _select_value(
+        value, layer = _select_value(
             getattr(explicit, field),
             suffix,
             process_values,
@@ -571,28 +597,33 @@ def _resolve_settings(
         )
         if value is _MISSING or _is_blank(value):
             resolved[field] = getattr(defaults, field)
+            sources[field] = ConfigurationSource.DEFAULT.value
         elif isinstance(value, str):
             resolved[field] = value
+            sources[field] = explicit_source if layer == "explicit" else layer
         else:
             raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
 
     for field, workflow_suffix, shared_suffix in _WORKFLOW_SETTING_SPECS:
-        value, _ = _select_workflow_value(
+        value, layer = _select_workflow_value(
             getattr(explicit, field),
             workflow_suffix,
             shared_suffix,
             process_values,
             dotenv_data,
         )
-        if value is _MISSING or _is_blank(value):
+        blank_is_value = field.endswith("reasoning_effort") and value is not _MISSING
+        if value is _MISSING or (_is_blank(value) and not blank_is_value):
             resolved[field] = getattr(defaults, field)
+            sources[field] = ConfigurationSource.DEFAULT.value
         elif isinstance(value, str):
             resolved[field] = value
+            sources[field] = explicit_source if layer == "explicit" else layer
         else:
             raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
 
     for field, suffix in _FLOAT_SETTING_SPECS:
-        value, _ = _select_value(
+        value, layer = _select_value(
             getattr(explicit, field),
             suffix,
             process_values,
@@ -603,8 +634,15 @@ def _resolve_settings(
             if value is _MISSING or _is_blank(value)
             else _parse_positive_float(value, field)
         )
+        sources[field] = (
+            ConfigurationSource.DEFAULT.value
+            if value is _MISSING or _is_blank(value)
+            else explicit_source
+            if layer == "explicit"
+            else layer
+        )
 
-    max_results, _ = _select_value(
+    max_results, max_results_layer = _select_value(
         explicit.max_results,
         "MAX_RESULTS",
         process_values,
@@ -615,8 +653,15 @@ def _resolve_settings(
         if max_results is _MISSING or _is_blank(max_results)
         else _parse_positive_int(max_results, "max_results")
     )
+    sources["max_results"] = (
+        ConfigurationSource.DEFAULT.value
+        if max_results is _MISSING or _is_blank(max_results)
+        else explicit_source
+        if max_results_layer == "explicit"
+        else max_results_layer
+    )
 
-    provider, _ = _select_value(
+    provider, provider_layer = _select_value(
         explicit.llm_provider,
         "LLM_PROVIDER",
         process_values,
@@ -627,7 +672,14 @@ def _resolve_settings(
         if provider is _MISSING or _is_blank(provider)
         else _parse_provider(provider)
     )
-    return Settings(**resolved)
+    sources["llm_provider"] = (
+        ConfigurationSource.DEFAULT.value
+        if provider is _MISSING or _is_blank(provider)
+        else explicit_source
+        if provider_layer == "explicit"
+        else provider_layer
+    )
+    return Settings(**resolved), sources
 
 
 def _select_value(
@@ -641,8 +693,8 @@ def _select_value(
     for values, prefix, layer in (
         (process_values, _CANONICAL_PREFIX, "process"),
         (process_values, _COMPATIBILITY_PREFIX, "process"),
-        (dotenv_data, _CANONICAL_PREFIX, "dotenv"),
-        (dotenv_data, _COMPATIBILITY_PREFIX, "dotenv"),
+        (dotenv_data, _CANONICAL_PREFIX, "private_dotenv"),
+        (dotenv_data, _COMPATIBILITY_PREFIX, "private_dotenv"),
     ):
         key = f"{prefix}{suffix}"
         if key in values:
@@ -662,8 +714,8 @@ def _select_workflow_value(
     for values, prefix, layer in (
         (process_values, _CANONICAL_PREFIX, "process"),
         (process_values, _COMPATIBILITY_PREFIX, "process"),
-        (dotenv_data, _CANONICAL_PREFIX, "dotenv"),
-        (dotenv_data, _COMPATIBILITY_PREFIX, "dotenv"),
+        (dotenv_data, _CANONICAL_PREFIX, "private_dotenv"),
+        (dotenv_data, _COMPATIBILITY_PREFIX, "private_dotenv"),
     ):
         for suffix in (workflow_suffix, shared_suffix):
             key = f"{prefix}{suffix}"

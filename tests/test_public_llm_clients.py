@@ -14,7 +14,13 @@ from career_agent_workbench.api_client import (
     _retry_delay_seconds,
 )
 from career_agent_workbench.config import Settings
-from career_agent_workbench.errors import LlmError, OllamaError, WorkflowError
+from career_agent_workbench.errors import (
+    LlmError,
+    LlmTimeoutError,
+    OllamaError,
+    OllamaTimeoutError,
+    WorkflowError,
+)
 from career_agent_workbench.llm import build_llm_client, llm_settings_label
 from career_agent_workbench.models import JobSearchQuery
 from career_agent_workbench.ollama import OllamaClient
@@ -241,6 +247,38 @@ def test_api_transient_retry_empty_retry_delays_and_permanent_failure() -> None:
 
     asyncio.run(permanent_scenario())
     assert permanent_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("client_type", "error_type"),
+    [(ApiLlmClient, LlmTimeoutError), (OllamaClient, OllamaTimeoutError)],
+)
+def test_public_llm_timeout_boundaries_preserve_typed_timeouts(
+    client_type,
+    error_type: type[Exception],
+) -> None:
+    def timeout(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("synthetic private timeout detail")
+
+    common = {
+        "base_url": "https://api.example.invalid",
+        "model": "synthetic-model",
+        "timeout_seconds": 3,
+        "transport": httpx.MockTransport(timeout),
+    }
+    client = (
+        client_type(api_key="synthetic-key", retry_attempts=1, **common)
+        if client_type is ApiLlmClient
+        else client_type(**common)
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(error_type) as captured:
+            await client.generate_text("synthetic prompt")
+        assert "private timeout detail" not in str(captured.value)
+        await client.aclose()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

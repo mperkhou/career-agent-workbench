@@ -35,3 +35,21 @@ class LlmError(CareerAgentWorkbenchError):
     """Raised when an API-backed language-model operation fails."""
 
     __slots__ = ()
+
+
+class ModelTimeoutError(CareerAgentWorkbenchError):
+    """Marker base for provider timeouts eligible for workflow retry."""
+
+    __slots__ = ()
+
+
+class LlmTimeoutError(LlmError, ModelTimeoutError):
+    """Raised when an API-backed language-model request times out."""
+
+    __slots__ = ()
+
+
+class OllamaTimeoutError(OllamaError, ModelTimeoutError):
+    """Raised when an Ollama generation request times out."""
+
+    __slots__ = ()

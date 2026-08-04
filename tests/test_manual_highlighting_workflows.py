@@ -1335,6 +1335,28 @@ def test_timeout_retries_then_succeeds_and_cleans_each_child(
     assert list(config.tmp_dir.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    ("action", "error_type"),
+    [
+        ("nonzero", CodexExecutionError),
+        ("missing", CodexOutputError),
+        ("oversized", CodexOutputError),
+        ("error", CodexExecutionError),
+    ],
+)
+def test_non_timeout_codex_failures_do_not_retry(
+    tmp_path: Path,
+    action: str,
+    error_type: type[Exception],
+) -> None:
+    executor = _FakeExecutor([action])
+    runner, config = _process_runner(tmp_path, executor)
+    with pytest.raises(error_type):
+        runner.run(_request(attempts=2))
+    assert len(executor.calls) == 1
+    assert list(config.tmp_dir.iterdir()) == []
+
+
 @pytest.mark.parametrize("target", ["executable", "working", "tmp"])
 def test_retry_revalidates_all_process_path_identities(
     tmp_path: Path,

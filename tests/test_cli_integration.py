@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from types import SimpleNamespace
 from pathlib import Path
@@ -25,6 +26,8 @@ from career_agent_workbench.config import (
     WorkspacePaths,
     load_runtime_config,
 )
+from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest
+from career_agent_workbench.errors import LlmError, LlmTimeoutError
 from career_agent_workbench.workflows import matching
 
 
@@ -485,3 +488,157 @@ def test_refinement_console_composes_resolved_runner_and_workflow(
     assert captured["workflow"]["paths"] is paths
     assert captured["workflow"]["job_id"] == "fictional-job"
     assert "processed" in capsys.readouterr().out
+
+
+def test_second_pass_config_only_is_model_and_state_free(
+    monkeypatch,
+    capsys,
+) -> None:
+    config = RuntimeConfig(paths=WorkspacePaths(), settings=Settings(), env_file=None)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "load_command_config",
+        lambda *_a, **_k: config,
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "ApplicationStateStore",
+        lambda *_a, **_k: pytest.fail("config-only created a state store"),
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "_ConfiguredLlmRunner",
+        lambda *_a, **_k: pytest.fail("config-only created a model runner"),
+    )
+
+    assert resume_refinement_cli.main(["--config-only"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"config_only": True}
+    event = json.loads(captured.err)
+    assert event["stage"] == "v2_critique"
+    assert event["model"] == "z-ai/glm-5.2"
+    assert event["timeout_seconds"] == 600.0
+    assert event["retry_count"] == 1
+    assert event["total_attempts"] == 2
+
+
+@pytest.mark.parametrize(
+    ("failures", "expected_calls", "expected_attempt"),
+    [
+        ((LlmTimeoutError("synthetic"),), 2, 2),
+        ((LlmError("synthetic"),), 1, None),
+    ],
+)
+def test_second_pass_retries_only_typed_timeouts(
+    monkeypatch,
+    failures: tuple[Exception, ...],
+    expected_calls: int,
+    expected_attempt: int | None,
+) -> None:
+    class FakeClient:
+        model = "synthetic-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_text(self, _prompt):
+            self.calls += 1
+            if self.calls <= len(failures):
+                raise failures[self.calls - 1]
+            return "synthetic response"
+
+        async def aclose(self):
+            return None
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=1,
+        timeout_seconds=600,
+    )
+    request = ModelRequest(
+        prompt="Synthetic prompt.",
+        config=CodexModelConfig(
+            model="synthetic-model",
+            reasoning_effort="",
+            workflow="refinement",
+        ),
+    )
+    if expected_attempt is None:
+        with pytest.raises(LlmError):
+            runner.run(request)
+    else:
+        result = runner.run(request)
+        assert result.model_metadata["attempt"] == expected_attempt
+    assert client.calls == expected_calls
+
+
+def test_second_pass_isolates_rows_and_artifact_exports(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    paths = WorkspacePaths(
+        root=tmp_path,
+        database=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "output",
+        master_resume=tmp_path / "resume.yml",
+        master_resume_text=tmp_path / "resume.txt",
+    )
+    config = RuntimeConfig(paths=paths, settings=Settings(), env_file=None)
+    attempts: list[str] = []
+
+    class FakeStore:
+        def __init__(self, _paths):
+            pass
+
+    class FakeRunner:
+        def __init__(self, *_a, **_k):
+            pass
+
+    def refine(**kwargs):
+        attempts.append(kwargs["job_id"])
+        return SimpleNamespace(job_id=kwargs["job_id"], candidate={})
+
+    def export(**kwargs):
+        if kwargs["job_id"] == "fictional-first":
+            raise OSError("synthetic private path")
+
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "load_command_config",
+        lambda *_a, **_k: config,
+    )
+    monkeypatch.setattr(resume_refinement_cli, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(resume_refinement_cli, "_ConfiguredLlmRunner", FakeRunner)
+    monkeypatch.setattr(resume_refinement_cli, "refine_resume_for_job", refine)
+    monkeypatch.setattr(resume_refinement_cli, "export_rendered_resume", export)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "resolve_private_workspace_path",
+        lambda *_a, **_k: tmp_path / "exports",
+    )
+
+    assert (
+        resume_refinement_cli.main(
+            [
+                "--job-id",
+                "fictional-first",
+                "--job-id",
+                "fictional-later",
+                "--artifact-dir",
+                "exports",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["processed"] == 1
+    assert payload["failed"] == 1
+    assert attempts == ["fictional-first", "fictional-later"]

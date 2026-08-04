@@ -14,6 +14,7 @@ import yaml
 
 import career_agent_workbench.artifact_exports as artifact_exports
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
+from career_agent_workbench.errors import LlmTimeoutError
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_NAMES = (
@@ -81,6 +82,84 @@ def test_script_state_defaults_and_template_are_none(name: str) -> None:
             assert action.default is None
         if "--output" in action.option_strings and name == "render_resume_html.py":
             assert action.default is None
+
+
+@pytest.mark.asyncio
+async def test_first_draft_config_only_emits_defaults_without_boundaries(
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    config = RuntimeConfig(paths=WorkspacePaths(), settings=Settings(), env_file=None)
+    monkeypatch.setattr(module, "load_command_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(
+        module,
+        "build_llm_client",
+        lambda *_a, **_k: pytest.fail("config-only created a model client"),
+    )
+    monkeypatch.setattr(
+        module,
+        "ApplicationStateStore",
+        lambda *_a, **_k: pytest.fail("config-only created a state store"),
+    )
+
+    assert await module.main_async(["--config-only"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"config_only": True}
+    events = [json.loads(line) for line in captured.err.splitlines()]
+    assert [event["stage"] for event in events] == [
+        "v1_core",
+        "v1_jod",
+        "v1_experience",
+    ]
+    assert all(event["timeout_seconds"] == 300.0 for event in events)
+    assert all(event["retry_count"] == 1 for event in events)
+    assert all(event["total_attempts"] == 2 for event in events)
+    assert all(event["sources"]["timeout"] == "default" for event in events)
+
+
+def test_manual_and_highlight_config_only_defaults_are_model_free(
+    monkeypatch,
+    capsys,
+) -> None:
+    config = RuntimeConfig(paths=WorkspacePaths(), settings=Settings(), env_file=None)
+    expectations = (
+        ("application_resume_manual_pass.py", "manual", "gpt-5.6-sol", "regular"),
+        ("application_resume_highlight_drafts.py", "highlight", "gpt-5.6-luna", None),
+    )
+    for name, stage, model, profile in expectations:
+        module = _load_script(name)
+        monkeypatch.setattr(module, "load_command_config", lambda *_a, **_k: config)
+        monkeypatch.setattr(
+            module,
+            "build_codex_runner",
+            lambda **_k: pytest.fail("config-only created a Codex runner"),
+        )
+        monkeypatch.setattr(
+            module,
+            "ApplicationStateStore",
+            lambda *_a, **_k: pytest.fail("config-only created a state store"),
+        )
+        assert module.main(["--config-only"]) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out) == {"config_only": True}
+        event = json.loads(captured.err)
+        assert event["stage"] == stage
+        assert event["model"] == model
+        assert event["timeout_seconds"] == 900.0
+        assert event["retry_count"] == 1
+        assert event["total_attempts"] == 2
+        assert event.get("profile") == profile
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["application_resume_manual_pass.py", "application_resume_highlight_drafts.py"],
+)
+def test_codex_workflow_parser_defaults_are_mature_aligned(name: str) -> None:
+    args = _load_script(name).build_arg_parser().parse_args([])
+    assert args.timeout_seconds == 900.0
+    assert args.retry_count == 1
 
 
 def test_render_script_resolves_configured_defaults_after_parsing(
@@ -618,15 +697,15 @@ async def test_first_draft_generation_sanitizes_each_stage_failure(
     assert str(raised.value) == "First-draft record processing failed."
     assert "unsafe" not in str(raised.value)
     if boundary == "core_request":
-        assert request_counts["core"] == 3
+        assert request_counts["core"] == 1
     if boundary == "jod_request":
-        assert request_counts["jod"] == 3
+        assert request_counts["jod"] == 1
     if boundary == "experience_rewrite_request":
-        assert request_counts["experience"] == 3
+        assert request_counts["experience"] == 1
 
 
 @pytest.mark.asyncio
-async def test_first_draft_retry_count_remains_initial_plus_two() -> None:
+async def test_first_draft_retries_only_typed_timeout_initial_plus_two() -> None:
     module = _load_script("application_resume_generate_drafts.py")
     attempts = 0
 
@@ -634,11 +713,26 @@ async def test_first_draft_retry_count_remains_initial_plus_two() -> None:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise module.LlmError("unsafe provider response")
+            raise LlmTimeoutError("unsafe provider response")
         return "accepted"
 
     assert await module._with_retries(operation, retries=2) == "accepted"
     assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_first_draft_does_not_retry_generic_model_failure() -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    attempts = 0
+
+    async def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise module.LlmError("unsafe provider response")
+
+    with pytest.raises(module.LlmError):
+        await module._with_retries(operation, retries=2)
+    assert attempts == 1
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -27,6 +28,16 @@ from career_agent_workbench.resume_highlighting import (
     DEFAULT_MAX_STRONG_SPANS_PER_BULLET,
     highlight_resume_for_job,
 )
+from career_agent_workbench.workflow_diagnostics import (
+    ConfigurationSource,
+    WorkflowStage,
+    configuration_event,
+    emit_diagnostic,
+    invocation_argument_source,
+)
+
+DEFAULT_CODEX_TIMEOUT_SECONDS = 900.0
+DEFAULT_WORKFLOW_RETRY_COUNT = 1
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -53,12 +64,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Write rendered YAML/HTML/PDF only beneath the private workspace.",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--codex-command", default="codex")
     parser.add_argument("--codex-model")
     parser.add_argument("--codex-reasoning-effort")
-    parser.add_argument("--timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--retry-count", type=int, default=1)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_CODEX_TIMEOUT_SECONDS,
+    )
+    parser.add_argument("--retry-count", type=int, default=DEFAULT_WORKFLOW_RETRY_COUNT)
     parser.add_argument(
         "--max-strong-spans-per-bullet",
         type=int,
@@ -71,23 +87,64 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_argv)
     try:
+        timeout_seconds = args.timeout_seconds
+        retry_count = args.retry_count
+        timeout_explicit = _argument_present(raw_argv, "--timeout-seconds")
+        retry_explicit = _argument_present(raw_argv, "--retry-count")
         config = load_command_config(
             args,
             required=(
-                WorkspaceMember.ROOT,
-                WorkspaceMember.DATABASE,
-                WorkspaceMember.OUTPUT_DIR,
-                WorkspaceMember.MASTER_RESUME,
-                WorkspaceMember.MASTER_RESUME_TEXT,
-                WorkspaceMember.TMP_DIR,
+                ()
+                if args.config_only
+                else (
+                    WorkspaceMember.ROOT,
+                    WorkspaceMember.DATABASE,
+                    WorkspaceMember.OUTPUT_DIR,
+                    WorkspaceMember.MASTER_RESUME,
+                    WorkspaceMember.MASTER_RESUME_TEXT,
+                    WorkspaceMember.TMP_DIR,
+                )
             ),
             setting_overrides={
                 "highlight_codex_model": args.codex_model,
                 "highlight_codex_reasoning_effort": (args.codex_reasoning_effort),
             },
         )
+        model = resolve_codex_model_config(
+            default_model=config.settings.highlight_codex_model,
+            default_reasoning_effort=(config.settings.highlight_codex_reasoning_effort),
+            workflow="highlighting",
+        )
+        emit_diagnostic(
+            configuration_event(
+                stage=WorkflowStage.HIGHLIGHT,
+                model=model.model,
+                effort=model.reasoning_effort,
+                timeout_seconds=timeout_seconds,
+                retry_count=retry_count,
+                sources={
+                    "model": config.setting_source("highlight_codex_model"),
+                    "effort": config.setting_source("highlight_codex_reasoning_effort"),
+                    "timeout": (
+                        ConfigurationSource.DEFAULT
+                        if not timeout_explicit
+                        else invocation_argument_source()
+                    ),
+                    "retry_count": (
+                        ConfigurationSource.DEFAULT
+                        if not retry_explicit
+                        else invocation_argument_source()
+                    ),
+                },
+                workspace_configured=config.paths.root is not None,
+            )
+        )
+        if args.config_only:
+            print(json.dumps({"config_only": True}, sort_keys=True))
+            return 0
         template = (
             resolve_private_workspace_path(
                 config.paths,
@@ -113,13 +170,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 working_directory=config.paths.require(WorkspaceMember.ROOT),
                 tmp_dir=config.paths.require(WorkspaceMember.TMP_DIR),
             ),
-            timeout_seconds=args.timeout_seconds,
-            retry_count=args.retry_count,
-        )
-        model = resolve_codex_model_config(
-            default_model=config.settings.highlight_codex_model,
-            default_reasoning_effort=(config.settings.highlight_codex_reasoning_effort),
-            workflow="highlighting",
+            timeout_seconds=timeout_seconds,
+            retry_count=retry_count,
         )
         selected = set(args.job_ids or ())
         records = [
@@ -176,6 +228,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
     return 1 if failures else 0
+
+
+def _argument_present(argv: Sequence[str], option: str) -> bool:
+    return any(value == option or value.startswith(f"{option}=") for value in argv)
 
 
 if __name__ == "__main__":

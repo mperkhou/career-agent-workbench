@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from time import monotonic
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from enum import StrEnum
@@ -43,7 +44,12 @@ from career_agent_workbench.cli_paths import (
     resolve_private_workspace_path,
 )
 from career_agent_workbench.config import WorkspaceMember, WorkspacePaths
-from career_agent_workbench.errors import LlmError, OllamaError, WorkflowError
+from career_agent_workbench.errors import (
+    LlmError,
+    ModelTimeoutError,
+    OllamaError,
+    WorkflowError,
+)
 from career_agent_workbench.jod import usable_job_description
 from career_agent_workbench.llm import build_llm_client
 from career_agent_workbench.resume_rendering import (
@@ -51,8 +57,20 @@ from career_agent_workbench.resume_rendering import (
     render_resume_html_from_mapping,
     render_resume_pdf_from_html,
 )
+from career_agent_workbench.workflow_diagnostics import (
+    ConfigurationSource,
+    DiagnosticEvent,
+    FailureCategory,
+    WorkflowStage,
+    attempt_event,
+    configuration_event,
+    emit_diagnostic,
+    invocation_argument_source,
+)
 
 T = TypeVar("T")
+DEFAULT_FIRST_DRAFT_TIMEOUT_SECONDS = 300.0
+DEFAULT_WORKFLOW_RETRY_COUNT = 1
 
 
 class _FailureStage(StrEnum):
@@ -235,13 +253,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-model")
     parser.add_argument("--artifact-dir", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument(
         "--max-jod-chars", type=int, default=CORE_SKILLS_PROMPT_JOD_MAX_CHARS
     )
     parser.add_argument("--jod-model")
     parser.add_argument("--llm-timeout-seconds", type=float)
-    parser.add_argument("--llm-retries", type=int, default=1)
+    parser.add_argument("--llm-retries", type=int)
     return parser
 
 
@@ -249,13 +268,105 @@ async def _with_retries(
     operation: Callable[[], Awaitable[T]],
     *,
     retries: int,
+    stage: WorkflowStage = WorkflowStage.V1_CORE,
 ) -> T:
-    for attempt in range(max(0, min(retries, 3)) + 1):
+    total_attempts = max(0, min(retries, 3)) + 1
+    for attempt in range(1, total_attempts + 1):
+        emit_diagnostic(
+            attempt_event(
+                event=DiagnosticEvent.ATTEMPT_START,
+                stage=stage,
+                attempt=attempt,
+                total_attempts=total_attempts,
+            )
+        )
+        started = monotonic()
         try:
-            return await operation()
-        except Exception:
-            if attempt >= max(0, min(retries, 3)):
+            result = await operation()
+        except ModelTimeoutError:
+            elapsed = monotonic() - started
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.ATTEMPT_ELAPSED,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    elapsed_seconds=elapsed,
+                )
+            )
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.TIMEOUT,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    category=FailureCategory.TIMEOUT,
+                )
+            )
+            retry = attempt < total_attempts
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.RETRY_DECISION,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    retry=retry,
+                    category=FailureCategory.TIMEOUT,
+                )
+            )
+            if not retry:
                 raise
+            continue
+        except Exception:
+            elapsed = monotonic() - started
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.ATTEMPT_ELAPSED,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    elapsed_seconds=elapsed,
+                )
+            )
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.RETRY_DECISION,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    retry=False,
+                    category=FailureCategory.MODEL,
+                )
+            )
+            emit_diagnostic(
+                attempt_event(
+                    event=DiagnosticEvent.FAILURE,
+                    stage=stage,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                    category=FailureCategory.MODEL,
+                )
+            )
+            raise
+        elapsed = monotonic() - started
+        emit_diagnostic(
+            attempt_event(
+                event=DiagnosticEvent.ATTEMPT_ELAPSED,
+                stage=stage,
+                attempt=attempt,
+                total_attempts=total_attempts,
+                elapsed_seconds=elapsed,
+            )
+        )
+        emit_diagnostic(
+            attempt_event(
+                event=DiagnosticEvent.ATTEMPT_COMPLETION,
+                stage=stage,
+                attempt=attempt,
+                total_attempts=total_attempts,
+            )
+        )
+        return result
     raise AssertionError("unreachable retry loop")
 
 
@@ -292,7 +403,9 @@ async def _generate_one(
     core_response = await _run_async_stage(
         _FailureStage.CORE_REQUEST,
         lambda: _with_retries(
-            lambda: core_client.generate_json(core_prompt), retries=retries
+            lambda: core_client.generate_json(core_prompt),
+            retries=retries,
+            stage=WorkflowStage.V1_CORE,
         ),
     )
     resume = _run_stage(
@@ -312,7 +425,9 @@ async def _generate_one(
     target_response = await _run_async_stage(
         _FailureStage.JOD_REQUEST,
         lambda: _with_retries(
-            lambda: jod_client.generate_json(target_prompt), retries=retries
+            lambda: jod_client.generate_json(target_prompt),
+            retries=retries,
+            stage=WorkflowStage.V1_JOD,
         ),
     )
     jod = _run_stage(
@@ -345,7 +460,9 @@ async def _generate_one(
         response = await _run_async_stage(
             _FailureStage.EXPERIENCE_REWRITE_REQUEST,
             lambda prompt=prompt: _with_retries(
-                lambda: jod_client.generate_text(prompt), retries=retries
+                lambda: jod_client.generate_text(prompt),
+                retries=retries,
+                stage=WorkflowStage.V1_EXPERIENCE,
             ),
         )
         resume = _run_stage(
@@ -429,21 +546,79 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     try:
-        if not 0 <= args.llm_retries <= 3:
+        retries = (
+            DEFAULT_WORKFLOW_RETRY_COUNT
+            if args.llm_retries is None
+            else args.llm_retries
+        )
+        if not 0 <= retries <= 3:
             raise CliConfigurationError("Model execution configuration is invalid.")
         config = load_command_config(
             args,
             required=(
-                WorkspaceMember.DATABASE,
-                WorkspaceMember.OUTPUT_DIR,
-                WorkspaceMember.MASTER_RESUME,
+                ()
+                if args.config_only
+                else (
+                    WorkspaceMember.DATABASE,
+                    WorkspaceMember.OUTPUT_DIR,
+                    WorkspaceMember.MASTER_RESUME,
+                )
             ),
             setting_overrides={
                 "core_skill_model": args.api_model,
                 "jod_model": args.jod_model,
                 "llm_api_timeout_seconds": args.llm_timeout_seconds,
+                "ollama_timeout_seconds": args.llm_timeout_seconds,
             },
         )
+        provider = config.settings.llm_provider
+        timeout_field = (
+            "ollama_timeout_seconds"
+            if provider == "ollama"
+            else "llm_api_timeout_seconds"
+        )
+        timeout_source = config.setting_source(timeout_field)
+        timeout_seconds = getattr(config.settings, timeout_field)
+        if args.llm_timeout_seconds is None and timeout_source == "default":
+            timeout_seconds = DEFAULT_FIRST_DRAFT_TIMEOUT_SECONDS
+        retry_source = (
+            ConfigurationSource.DEFAULT.value
+            if args.llm_retries is None
+            else invocation_argument_source().value
+        )
+        if provider == "ollama":
+            core_model = jod_model = config.settings.ollama_model
+            core_model_source = jod_model_source = config.setting_source("ollama_model")
+        else:
+            core_model = config.settings.core_skill_model
+            jod_model = config.settings.jod_model
+            core_model_source = config.setting_source("core_skill_model")
+            jod_model_source = config.setting_source("jod_model")
+        workspace_configured = config.paths.root is not None
+        for stage, model, model_source in (
+            (WorkflowStage.V1_CORE, core_model, core_model_source),
+            (WorkflowStage.V1_JOD, jod_model, jod_model_source),
+            (WorkflowStage.V1_EXPERIENCE, jod_model, jod_model_source),
+        ):
+            emit_diagnostic(
+                configuration_event(
+                    stage=stage,
+                    model=model,
+                    effort="",
+                    timeout_seconds=timeout_seconds,
+                    retry_count=retries,
+                    sources={
+                        "model": model_source,
+                        "effort": ConfigurationSource.DEFAULT,
+                        "timeout": timeout_source,
+                        "retry_count": retry_source,
+                    },
+                    workspace_configured=workspace_configured,
+                )
+            )
+        if args.config_only:
+            print(json.dumps({"config_only": True}, sort_keys=True))
+            return 0
         template = (
             resolve_private_workspace_path(
                 config.paths,
@@ -486,10 +661,16 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         break
             print(json.dumps({"candidates": len(eligible), "dry_run": True}))
             return 0
-        core_model = config.settings.core_skill_model
-        jod_model = config.settings.jod_model
-        core_client = build_llm_client(config.settings, api_model=core_model)
-        jod_client = build_llm_client(config.settings, api_model=jod_model)
+        core_client = build_llm_client(
+            config.settings,
+            api_model=core_model,
+            timeout_seconds=timeout_seconds,
+        )
+        jod_client = build_llm_client(
+            config.settings,
+            api_model=jod_model,
+            timeout_seconds=timeout_seconds,
+        )
         processed = 0
         failures = 0
         failure_diagnostics: list[dict[str, str]] = []
@@ -517,7 +698,7 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         template=template,
                         artifact_dir=artifact_dir,
                         max_jod_chars=args.max_jod_chars,
-                        retries=args.llm_retries,
+                        retries=retries,
                     )
                     processed += int(generated)
                 except Exception as error:

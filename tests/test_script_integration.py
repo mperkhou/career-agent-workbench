@@ -358,7 +358,9 @@ async def test_first_draft_generation_contains_snapshot_failure_per_record(
 
         def get_workflow_snapshot(self, job_id):
             if job_id == "fictional-bad":
-                raise RuntimeError("synthetic snapshot failure")
+                raise RuntimeError(
+                    "token=unsafe HTTP 429 /private/operator/path private resume text"
+                )
             return later_snapshot
 
     class FakeClient:
@@ -394,9 +396,357 @@ async def test_first_draft_generation_contains_snapshot_failure_per_record(
     monkeypatch.setattr(module, "_generate_one", fake_generate_one)
 
     assert await module.main_async([]) == 1
-    assert json.loads(capsys.readouterr().out) == {"failed": 1, "processed": 1}
+    rendered = capsys.readouterr().out
+    assert json.loads(rendered) == {
+        "failed": 1,
+        "failure_diagnostics": [{"category": "unexpected", "stage": "candidate_read"}],
+        "processed": 1,
+    }
+    assert "unsafe" not in rendered
+    assert "HTTP 429" not in rendered
+    assert "operator" not in rendered
+    assert "resume text" not in rendered
     assert generated == ["fictional-later"]
     assert all(client.closed for client in clients)
+
+
+def test_first_draft_failure_diagnostic_vocabularies_are_closed() -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+
+    assert {item.value for item in module._FailureStage} == {
+        "candidate_read",
+        "resume_initialize",
+        "core_request",
+        "core_apply",
+        "jod_request",
+        "jod_apply",
+        "experience_rewrite_request",
+        "experience_rewrite_apply",
+        "html_render",
+        "pdf_render",
+        "ats",
+        "state_write",
+        "artifact_export",
+    }
+    assert {item.value for item in module._FailureCategory} == {
+        "model",
+        "parse",
+        "policy",
+        "render",
+        "ats",
+        "state",
+        "artifact",
+        "local_io",
+        "unexpected",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "expected_stage", "error_family", "expected_category"),
+    [
+        ("resume_initialize", "resume_initialize", "parse", "parse"),
+        ("core_request", "core_request", "model", "model"),
+        ("core_apply", "core_apply", "parse", "parse"),
+        ("jod_request", "jod_request", "model", "model"),
+        ("jod_apply", "jod_apply", "parse", "parse"),
+        (
+            "experience_rewrite_request",
+            "experience_rewrite_request",
+            "model",
+            "model",
+        ),
+        (
+            "experience_rewrite_apply",
+            "experience_rewrite_apply",
+            "parse",
+            "parse",
+        ),
+        ("html_render", "html_render", "render", "render"),
+        ("pdf_render", "pdf_render", "render", "render"),
+        ("ats", "ats", "ats", "ats"),
+        ("state_write", "state_write", "state", "state"),
+        ("artifact_export", "artifact_export", "artifact", "artifact"),
+    ],
+)
+async def test_first_draft_generation_sanitizes_each_stage_failure(
+    monkeypatch,
+    tmp_path: Path,
+    boundary: str,
+    expected_stage: str,
+    error_family: str,
+    expected_category: str,
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    unsafe_text = "token=unsafe HTTP 503 /private/operator/path response body"
+    errors = {
+        "model": module.LlmError(unsafe_text),
+        "parse": ValueError(unsafe_text),
+        "render": module.ResumeRenderingError(unsafe_text),
+        "ats": module.AtsError(unsafe_text),
+        "state": module.ApplicationStateError(unsafe_text),
+        "artifact": ValueError(unsafe_text),
+    }
+    error = errors[error_family]
+    resume = {"professional_experience": {"jobs": []}}
+    request_counts = {"core": 0, "jod": 0, "experience": 0}
+
+    def result_or_failure(name: str, result):
+        if boundary == name:
+            raise error
+        return result
+
+    class FakeCoreClient:
+        model = "fictional-core-model"
+
+        async def generate_json(self, _prompt):
+            request_counts["core"] += 1
+            return result_or_failure("core_request", {})
+
+    class FakeJodClient:
+        async def generate_json(self, _prompt):
+            request_counts["jod"] += 1
+            return result_or_failure("jod_request", {})
+
+        async def generate_text(self, _prompt):
+            request_counts["experience"] += 1
+            return result_or_failure("experience_rewrite_request", "rewritten")
+
+    class FakeStore:
+        def upsert_resume_variant_if_revision(self, *_args, **_kwargs):
+            return result_or_failure("state_write", None)
+
+    score = SimpleNamespace(
+        overall_score=80,
+        parsing_score=90,
+        keyword_match_score=70,
+        semantic_match_score=75,
+        formatting_risk="low",
+        missing_high_value_terms=(),
+    )
+    diagnostics = SimpleNamespace(score=score)
+    monkeypatch.setattr(
+        module,
+        "initialize_application_resume_object",
+        lambda *_a, **_k: result_or_failure("resume_initialize", resume),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_core_skills_jod_match_prompt",
+        lambda **_k: "core prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "apply_core_skill_jod_matches",
+        lambda **_k: result_or_failure("core_apply", resume),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_jod_requirements_target_prompt",
+        lambda **_k: "jod prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "create_job_opening_description_object",
+        lambda **_k: result_or_failure("jod_apply", {"requirements_targets": []}),
+    )
+    monkeypatch.setattr(
+        module,
+        "attach_job_opening_description_object",
+        lambda **_k: resume,
+    )
+    monkeypatch.setattr(
+        module,
+        "experience_jobs_for_jod_bullet_rewrite",
+        lambda _resume: ({"order": 1},),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_experience_job_bullet_rewrite_prompt",
+        lambda **_k: "experience prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "replace_experience_job_bullets_from_text_response",
+        lambda **_k: result_or_failure("experience_rewrite_apply", resume),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_resume_html_from_mapping",
+        lambda **_k: result_or_failure("html_render", "<html></html>"),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_resume_pdf_from_html",
+        lambda _html: result_or_failure("pdf_render", b"synthetic-pdf"),
+    )
+    monkeypatch.setattr(
+        module,
+        "calculate_ats_diagnostics",
+        lambda **_k: result_or_failure("ats", diagnostics),
+    )
+    monkeypatch.setattr(module, "asdict", lambda _value: {"synthetic": True})
+    monkeypatch.setattr(
+        module,
+        "export_rendered_resume",
+        lambda **_k: result_or_failure("artifact_export", None),
+    )
+    candidate = module._EligibleCandidate(
+        job_id="fictional-job",
+        snapshot=SimpleNamespace(revision=object()),
+        description="Responsibilities: Build fictional systems.",
+    )
+
+    with pytest.raises(module._FirstDraftFailure) as raised:
+        await module._generate_one(
+            store=FakeStore(),
+            paths=WorkspacePaths(master_resume=tmp_path / "resume.yml"),
+            candidate=candidate,
+            core_client=FakeCoreClient(),
+            jod_client=FakeJodClient(),
+            jod_model="fictional-model",
+            template=None,
+            artifact_dir=tmp_path / "exports",
+            max_jod_chars=1_000,
+            retries=2,
+        )
+
+    assert module._failure_diagnostic(raised.value) == {
+        "category": expected_category,
+        "stage": expected_stage,
+    }
+    assert str(raised.value) == "First-draft record processing failed."
+    assert "unsafe" not in str(raised.value)
+    if boundary == "core_request":
+        assert request_counts["core"] == 3
+    if boundary == "jod_request":
+        assert request_counts["jod"] == 3
+    if boundary == "experience_rewrite_request":
+        assert request_counts["experience"] == 3
+
+
+@pytest.mark.asyncio
+async def test_first_draft_retry_count_remains_initial_plus_two() -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    attempts = 0
+
+    async def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise module.LlmError("unsafe provider response")
+        return "accepted"
+
+    assert await module._with_retries(operation, retries=2) == "accepted"
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_first_draft_success_payload_remains_compatible(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    snapshot = SimpleNamespace(
+        application=SimpleNamespace(
+            prompt_job_description="Responsibilities: Build fictional systems.",
+            job_description=None,
+        ),
+        variants=(),
+    )
+
+    class FakeStore:
+        def __init__(self, _paths):
+            pass
+
+        def list_applications(self, *_args, **_kwargs):
+            return (SimpleNamespace(job_id="fictional-job"),)
+
+        def get_workflow_snapshot(self, _job_id):
+            return snapshot
+
+    class FakeClient:
+        async def aclose(self) -> None:
+            pass
+
+    clients = iter((FakeClient(), FakeClient()))
+    config = RuntimeConfig(
+        paths=WorkspacePaths(
+            database=tmp_path / "state.sqlite3",
+            output_dir=tmp_path / "artifacts",
+            master_resume=tmp_path / "resume.yml",
+        ),
+        settings=Settings(),
+        env_file=None,
+    )
+    monkeypatch.setattr(module, "load_command_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(module, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(
+        module,
+        "build_llm_client",
+        lambda *_a, **_k: next(clients),
+    )
+
+    async def successful_generation(**_kwargs):
+        return True
+
+    monkeypatch.setattr(module, "_generate_one", successful_generation)
+
+    assert await module.main_async([]) == 0
+    assert json.loads(capsys.readouterr().out) == {"failed": 0, "processed": 1}
+
+
+@pytest.mark.asyncio
+async def test_first_draft_fail_fast_cli_error_hides_record_exception(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    unsafe_text = "token=unsafe HTTP 429 /private/operator/path response body"
+
+    class FakeStore:
+        def __init__(self, _paths):
+            pass
+
+        def list_applications(self, *_args, **_kwargs):
+            return (SimpleNamespace(job_id="fictional-job"),)
+
+        def get_workflow_snapshot(self, _job_id):
+            raise RuntimeError(unsafe_text)
+
+    class FakeClient:
+        async def aclose(self) -> None:
+            pass
+
+    clients = iter((FakeClient(), FakeClient()))
+    config = RuntimeConfig(
+        paths=WorkspacePaths(
+            database=tmp_path / "state.sqlite3",
+            output_dir=tmp_path / "artifacts",
+            master_resume=tmp_path / "resume.yml",
+        ),
+        settings=Settings(),
+        env_file=None,
+    )
+    monkeypatch.setattr(module, "load_command_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(module, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(
+        module,
+        "build_llm_client",
+        lambda *_a, **_k: next(clients),
+    )
+
+    with pytest.raises(SystemExit):
+        await module.main_async(["--fail-fast"])
+
+    stderr = capsys.readouterr().err
+    assert "First-draft generation could not be completed." in stderr
+    assert "unsafe" not in stderr
+    assert "HTTP 429" not in stderr
+    assert "operator" not in stderr
+    assert "response body" not in stderr
 
 
 def test_first_draft_import_uses_one_parsed_mapping_after_source_replacement(

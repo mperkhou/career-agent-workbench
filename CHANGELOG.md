@@ -50,6 +50,12 @@
   without relaxing validation, losing diagnostic values or order, changing
   automatic selection, or weakening expected-revision enforcement; any further
   live traversal remains separately gated.
+- After G03S approval, authorized one separate post-fix synthetic traversal at
+  the repaired commit: one model-free preflight followed, only on successive
+  success, by one `demo-platform-001` v1, v2, regular-manual, and highlighting
+  invocation. The sequence uses two retries/three total attempts, stops at the
+  first failure without an operator rerun, preserves four untracked external
+  artifact/PDF snapshot sets and a sanitized log, and remains gated before P04.
 
 ## [2.0.0] - In progress
 

@@ -15,7 +15,8 @@
 - Added an explicitly authorized synthetic live traversal through v1, v2,
   manual review, and highlighting so README examples and replacement Flask
   illustrations can use reviewed stored outputs instead of invented workflow
-  results, while keeping the deterministic offline demo unchanged.
+  results, while keeping the deterministic offline demo unchanged and retaining
+  the four final variant snapshots outside Git for later example review.
 
 ## [2.0.0] - In progress
 

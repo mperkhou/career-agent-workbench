@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from time import monotonic
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from enum import StrEnum
@@ -46,9 +45,11 @@ from career_agent_workbench.cli_paths import (
 from career_agent_workbench.config import WorkspaceMember, WorkspacePaths
 from career_agent_workbench.errors import (
     LlmError,
+    ModelFailureSubtype,
     ModelTimeoutError,
     OllamaError,
     WorkflowError,
+    model_failure_subtype,
 )
 from career_agent_workbench.jod import usable_job_description
 from career_agent_workbench.llm import build_llm_client
@@ -59,14 +60,12 @@ from career_agent_workbench.resume_rendering import (
 )
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
-    DiagnosticEvent,
-    FailureCategory,
     WorkflowStage,
-    attempt_event,
     configuration_event,
     emit_diagnostic,
     invocation_argument_source,
 )
+from career_agent_workbench.workflow_retry import run_model_operation
 
 T = TypeVar("T")
 DEFAULT_FIRST_DRAFT_TIMEOUT_SECONDS = 300.0
@@ -102,17 +101,19 @@ class _FailureCategory(StrEnum):
 
 
 class _FirstDraftFailure(Exception):
-    __slots__ = ("category", "stage")
+    __slots__ = ("category", "failure_subtype", "stage")
 
     def __init__(
         self,
         *,
         stage: _FailureStage,
         category: _FailureCategory,
+        failure_subtype: ModelFailureSubtype | None = None,
     ) -> None:
         super().__init__("First-draft record processing failed.")
         self.stage = stage
         self.category = category
+        self.failure_subtype = failure_subtype
 
 
 def _failure_category(
@@ -159,6 +160,11 @@ def _stage_failure(stage: _FailureStage, error: Exception) -> _FirstDraftFailure
     return _FirstDraftFailure(
         stage=stage,
         category=_failure_category(error, stage=stage),
+        failure_subtype=(
+            model_failure_subtype(error)
+            if isinstance(error, (LlmError, OllamaError, ModelTimeoutError))
+            else None
+        ),
     )
 
 
@@ -180,10 +186,13 @@ async def _run_async_stage(
 
 
 def _failure_diagnostic(error: _FirstDraftFailure) -> dict[str, str]:
-    return {
+    result = {
         "stage": error.stage.value,
         "category": error.category.value,
     }
+    if error.failure_subtype is not None:
+        result["failure_subtype"] = error.failure_subtype.value
+    return result
 
 
 class _EligibleCandidate:
@@ -269,105 +278,14 @@ async def _with_retries(
     *,
     retries: int,
     stage: WorkflowStage = WorkflowStage.V1_CORE,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> T:
-    total_attempts = max(0, min(retries, 3)) + 1
-    for attempt in range(1, total_attempts + 1):
-        emit_diagnostic(
-            attempt_event(
-                event=DiagnosticEvent.ATTEMPT_START,
-                stage=stage,
-                attempt=attempt,
-                total_attempts=total_attempts,
-            )
-        )
-        started = monotonic()
-        try:
-            result = await operation()
-        except ModelTimeoutError:
-            elapsed = monotonic() - started
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    elapsed_seconds=elapsed,
-                )
-            )
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.TIMEOUT,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    category=FailureCategory.TIMEOUT,
-                )
-            )
-            retry = attempt < total_attempts
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.RETRY_DECISION,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    retry=retry,
-                    category=FailureCategory.TIMEOUT,
-                )
-            )
-            if not retry:
-                raise
-            continue
-        except Exception:
-            elapsed = monotonic() - started
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    elapsed_seconds=elapsed,
-                )
-            )
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.RETRY_DECISION,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    retry=False,
-                    category=FailureCategory.MODEL,
-                )
-            )
-            emit_diagnostic(
-                attempt_event(
-                    event=DiagnosticEvent.FAILURE,
-                    stage=stage,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    category=FailureCategory.MODEL,
-                )
-            )
-            raise
-        elapsed = monotonic() - started
-        emit_diagnostic(
-            attempt_event(
-                event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                stage=stage,
-                attempt=attempt,
-                total_attempts=total_attempts,
-                elapsed_seconds=elapsed,
-            )
-        )
-        emit_diagnostic(
-            attempt_event(
-                event=DiagnosticEvent.ATTEMPT_COMPLETION,
-                stage=stage,
-                attempt=attempt,
-                total_attempts=total_attempts,
-            )
-        )
-        return result
-    raise AssertionError("unreachable retry loop")
+    return await run_model_operation(
+        operation,
+        retries=retries,
+        stage=stage,
+        sleep=sleep,
+    )
 
 
 async def _generate_one(

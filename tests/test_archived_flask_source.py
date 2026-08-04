@@ -17,12 +17,17 @@ from career_agent_workbench.application_state import (
     ResumeVariantWrite,
 )
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
+from career_agent_workbench.errors import ModelFailureSubtype
 from career_agent_workbench.webapp_archive_runtime import create_app
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
+    DiagnosticEvent,
+    FailureCategory,
     WorkflowStage,
+    attempt_event,
     configuration_event,
 )
+from career_agent_workbench.workflow_status import WorkflowStatusStore
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "career_agent_workbench" / "_archived_flask_source.py"
@@ -480,12 +485,22 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
         },
         workspace_configured=True,
     )
+    typed_retry = attempt_event(
+        event=DiagnosticEvent.RETRY_DECISION,
+        stage=WorkflowStage.V1_CORE,
+        attempt=1,
+        total_attempts=3,
+        retry=True,
+        category=FailureCategory.MODEL,
+        failure_subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+    )
     captured: dict[str, object] = {}
 
     class FakeProcess:
         stdout = iter(
             (
                 f"{json.dumps(diagnostic)}\n",
+                f"{json.dumps(typed_retry)}\n",
                 "RAW /private/operator/path prompt response secret-marker\n",
             )
         )
@@ -539,6 +554,7 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
     assert "secret-marker" not in rendered
     assert "operator/path" not in rendered
     assert "synthetic-job" not in rendered
+    assert "transient http" in rendered
     persisted = "".join(
         path.read_text(encoding="utf-8")
         for path in (runtime.paths.tmp_dir / "workflow-status").glob("*.json")
@@ -546,3 +562,11 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
     assert "secret-marker" not in persisted
     assert "operator/path" not in persisted
     assert "synthetic-job" not in persisted
+    reloaded = WorkflowStatusStore(runtime.paths.tmp_dir).load()
+    stored = next(item for item in reloaded if item["id"] == run.run_id)
+    stored_retry = next(
+        event
+        for event in stored["events"]
+        if event.get("failure_subtype") == "transient_http"
+    )
+    assert stored_retry["category"] == "model"

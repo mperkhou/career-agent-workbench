@@ -34,8 +34,9 @@
   and additive legacy-compatible failure subtypes through the existing P03C
   diagnostic stream and Flask action log. Ollama remains timeout-only,
   manual/highlighting behavior is unchanged, generalized durable diagnostic
-  ownership/leases/recovery/correlation/viewing are deferred to a future
-  feature release, and another live traversal remains separately gated.
+  ownership/leases/recovery/correlation/final-summary state, composite-Make
+  ownership, and structured viewing are deferred to a future feature release,
+  and another live traversal remains separately gated.
 
 ## [2.0.0] - In progress
 

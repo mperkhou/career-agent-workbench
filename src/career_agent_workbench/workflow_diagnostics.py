@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import TextIO
 
+from career_agent_workbench.errors import ModelFailureSubtype
+
 INVOCATION_SOURCE_ENV = "CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE"
 MAX_DIAGNOSTIC_BYTES = 4_096
 
@@ -141,6 +143,7 @@ def attempt_event(
     elapsed_seconds: float | None = None,
     retry: bool | None = None,
     category: FailureCategory | None = None,
+    failure_subtype: ModelFailureSubtype | None = None,
 ) -> dict[str, object]:
     """Build one bounded attempt lifecycle event without content values."""
 
@@ -172,6 +175,10 @@ def attempt_event(
         result["retry"] = retry
     if category is not None:
         result["category"] = category.value
+    if failure_subtype is not None:
+        if not isinstance(failure_subtype, ModelFailureSubtype):
+            raise ValueError("Workflow diagnostic event is invalid.")
+        result["failure_subtype"] = failure_subtype.value
     return result
 
 
@@ -240,6 +247,8 @@ def sanitized_diagnostic_event(value: object) -> dict[str, object] | None:
         allowed.add("retry")
     if "category" in value:
         allowed.add("category")
+    if "failure_subtype" in value:
+        allowed.add("failure_subtype")
     if set(value) != allowed:
         return None
     try:
@@ -254,6 +263,11 @@ def sanitized_diagnostic_event(value: object) -> dict[str, object] | None:
                 None
                 if value.get("category") is None
                 else FailureCategory(value["category"])
+            ),
+            failure_subtype=(
+                None
+                if value.get("failure_subtype") is None
+                else ModelFailureSubtype(value["failure_subtype"])
             ),
         )
     except (TypeError, ValueError):

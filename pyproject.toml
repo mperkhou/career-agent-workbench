@@ -121,6 +121,9 @@ include = [
   "/src/career_agent_workbench/webapp.py",
   "/src/career_agent_workbench/webapp_archive_runtime.py",
   "/src/career_agent_workbench/webapp_ingestion.py",
+  "/src/career_agent_workbench/workflow_diagnostics.py",
+  "/src/career_agent_workbench/workflow_retry.py",
+  "/src/career_agent_workbench/workflow_status.py",
   "/src/career_agent_workbench/workflows/__init__.py",
   "/src/career_agent_workbench/workflows/applications.py",
   "/src/career_agent_workbench/workflows/matching.py",
@@ -176,6 +179,8 @@ include = [
   "/tests/test_script_integration.py",
   "/tests/test_smoke.py",
   "/tests/test_webapp_ingestion.py",
+  "/tests/test_workflow_retry.py",
+  "/tests/test_workflow_status.py",
 ]
 
 [tool.pytest.ini_options]

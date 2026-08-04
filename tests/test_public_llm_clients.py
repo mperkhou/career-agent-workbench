@@ -17,8 +17,11 @@ from career_agent_workbench.config import Settings
 from career_agent_workbench.errors import (
     LlmError,
     LlmTimeoutError,
+    ModelFailureSubtype,
+    NonRetryableModelError,
     OllamaError,
     OllamaTimeoutError,
+    RetryableModelError,
     WorkflowError,
 )
 from career_agent_workbench.llm import build_llm_client, llm_settings_label
@@ -1244,6 +1247,258 @@ def test_workflow_api_client_does_not_hide_non_timeout_retries(
     async def scenario() -> None:
         with pytest.raises(LlmError):
             await client.generate_text("synthetic prompt")
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.PERMANENT_HTTP,
+            http_status=400,
+        ),
+        lambda: RetryableModelError(subtype=ModelFailureSubtype.MALFORMED_ENVELOPE),
+        lambda: NonRetryableModelError(
+            subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+            http_status=429,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+            http_status=400,
+        ),
+        lambda: NonRetryableModelError(
+            subtype=ModelFailureSubtype.PERMANENT_HTTP,
+            http_status=503,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSPORT_CONNECT,
+            http_status=503,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSPORT_READ,
+            retry_after_seconds=1,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+            http_status=429,
+            retry_after_seconds=121,
+        ),
+        lambda: RetryableModelError(subtype=ModelFailureSubtype.TIMEOUT),
+        lambda: NonRetryableModelError(
+            subtype=ModelFailureSubtype.PERMANENT_HTTP,
+            http_status=200,
+        ),
+    ],
+)
+def test_typed_model_failure_rejects_contradictory_metadata(operation) -> None:
+    with pytest.raises(ValueError, match="Model failure metadata is invalid"):
+        operation()
+
+
+@pytest.mark.parametrize("status", [408, 409, 425, 429, 500, 502, 503, 504])
+def test_typed_transient_http_contract_accepts_only_allowlisted_statuses(
+    status: int,
+) -> None:
+    error = RetryableModelError(
+        subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+        http_status=status,
+        retry_after_seconds=0,
+    )
+    assert error.http_status == status
+    assert error.retry_after_seconds == 0
+
+
+@pytest.mark.parametrize(
+    ("error_factory", "expected_subtype", "expected_calls"),
+    [
+        (
+            lambda request: httpx.ReadTimeout(
+                "synthetic timeout",
+                request=request,
+            ),
+            ModelFailureSubtype.TIMEOUT,
+            1,
+        ),
+        (
+            lambda request: httpx.ConnectError(
+                "synthetic connection interruption",
+                request=request,
+            ),
+            ModelFailureSubtype.TRANSPORT_CONNECT,
+            1,
+        ),
+        (
+            lambda request: httpx.ReadError(
+                "synthetic read interruption",
+                request=request,
+            ),
+            ModelFailureSubtype.TRANSPORT_READ,
+            1,
+        ),
+        (
+            lambda request: httpx.RemoteProtocolError(
+                "synthetic remote interruption",
+                request=request,
+            ),
+            ModelFailureSubtype.TRANSPORT_PROTOCOL,
+            1,
+        ),
+        (
+            lambda request: httpx.LocalProtocolError(
+                "synthetic local misuse",
+                request=request,
+            ),
+            ModelFailureSubtype.UNEXPECTED_MODEL,
+            1,
+        ),
+    ],
+)
+def test_standalone_api_transport_contract_does_not_retry_request_failure(
+    error_factory,
+    expected_subtype: ModelFailureSubtype,
+    expected_calls: int,
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise error_factory(request)
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=2,
+        retry_backoff_seconds=0,
+        sleep=sleep,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(LlmError) as captured:
+            await client.generate_text("synthetic prompt")
+        assert captured.value.subtype is expected_subtype
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == expected_calls
+    assert len(sleeps) == expected_calls - 1
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_subtype", "generated_json"),
+    [
+        ("timeout", ModelFailureSubtype.TIMEOUT, False),
+        ("connect", ModelFailureSubtype.TRANSPORT_CONNECT, False),
+        ("read", ModelFailureSubtype.TRANSPORT_READ, False),
+        ("remote_protocol", ModelFailureSubtype.TRANSPORT_PROTOCOL, False),
+        ("local_protocol", ModelFailureSubtype.UNEXPECTED_MODEL, False),
+        ("unexpected", ModelFailureSubtype.UNEXPECTED_MODEL, False),
+        ("transient_http", ModelFailureSubtype.TRANSIENT_HTTP, False),
+        ("permanent_http", ModelFailureSubtype.PERMANENT_HTTP, False),
+        ("empty", ModelFailureSubtype.EMPTY_COMPLETION, False),
+        ("malformed", ModelFailureSubtype.MALFORMED_ENVELOPE, False),
+        ("too_large", ModelFailureSubtype.RESPONSE_TOO_LARGE, False),
+        ("invalid_json", ModelFailureSubtype.INVALID_GENERATION_JSON, True),
+    ],
+)
+def test_api_failure_translation_matrix_is_typed_and_content_free(
+    case: str,
+    expected_subtype: ModelFailureSubtype,
+    generated_json: bool,
+) -> None:
+    marker = "SYNTHETIC-UPSTREAM-PRIVATE-MARKER"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if case == "timeout":
+            raise httpx.ReadTimeout(marker, request=request)
+        if case == "connect":
+            raise httpx.ConnectError(marker, request=request)
+        if case == "read":
+            raise httpx.ReadError(marker, request=request)
+        if case == "remote_protocol":
+            raise httpx.RemoteProtocolError(marker, request=request)
+        if case == "local_protocol":
+            raise httpx.LocalProtocolError(marker, request=request)
+        if case == "unexpected":
+            raise RuntimeError(marker)
+        if case == "transient_http":
+            return httpx.Response(503, text=marker)
+        if case == "permanent_http":
+            return httpx.Response(400, text=marker)
+        if case == "empty":
+            return _api_response("<think>bounded reasoning</think>")
+        if case == "malformed":
+            return httpx.Response(200, content=marker.encode())
+        if case == "too_large":
+            return httpx.Response(
+                200,
+                headers={"content-length": "2000001"},
+                content=b"unused",
+            )
+        if case == "invalid_json":
+            return _api_response(marker)
+        raise AssertionError("unknown synthetic case")
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(LlmError) as captured:
+            if generated_json:
+                await client.generate_json("synthetic prompt")
+            else:
+                await client.generate_text("synthetic prompt")
+        assert captured.value.subtype is expected_subtype
+        assert marker not in f"{captured.value!r} {captured.value}"
+        assert captured.value.__cause__ is None
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("generation", ['{"score": NaN}', '{"score": Infinity}'])
+def test_api_generation_rejects_nonstandard_json_without_retry(
+    generation: str,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _api_response(generation)
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=5,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await client.generate_json("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.INVALID_GENERATION_JSON
         await client.aclose()
 
     asyncio.run(scenario())

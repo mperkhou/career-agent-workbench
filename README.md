@@ -687,12 +687,15 @@ The model-assisted resume workflows use these public effective defaults:
 | Highlighting | Luna/high | 900 seconds | 1 | 2 |
 
 A retry count is the number of retries after the initial attempt, so a retry
-count of `2` allows three total attempts. v1 and v2 retry only typed provider
-timeouts. Manual pass and highlighting retry only a Codex subprocess timeout.
-Nonzero exits, missing or invalid output, parsing/schema, policy or evidence
-rejection, rendering, ATS, state, artifact, and configuration failures fail
-that row without consuming another workflow attempt. Batch commands keep later
-rows isolated and preserve earlier successful writes.
+count of `2` allows three total attempts. API-backed v1 and v2 retry only typed
+timeouts and the closed transient allowlist: HTTP 408, 409, 425, 429, 500, 502,
+503, or 504; remote connect, read, or protocol interruption; and a valid empty
+completion. Ollama-backed v1 and v2 remain timeout-only. Manual pass and
+highlighting remain Codex-subprocess-timeout-only. Codex nonzero exits and
+missing or invalid output do not retry. Invalid generated JSON, schema, policy
+or evidence rejection, rendering, ATS, state, artifact, and configuration
+failures fail that row without consuming another workflow attempt. Batch
+commands keep later rows isolated and preserve earlier successful writes.
 
 Each workflow has a configuration-only preflight that resolves normal CLI,
 Make, process-environment, private-dotenv, compatibility, and default layers,
@@ -710,6 +713,8 @@ events go to stderr. Configuration events report only the stage, approved model
 label, reasoning effort or `inherit`, timeout, retry and total-attempt counts,
 source layer (`cli`, `make`, `process`, `private_dotenv`, or `default`), and a
 workspace-configured boolean.
+Attempt events retain the stable broad failure category and may carry a closed,
+optional `failure_subtype`; legacy events omit that additive field.
 
 Make passes the six unprefixed workflow knobs
 `FIRST_DRAFT_LLM_TIMEOUT_SECONDS`, `FIRST_DRAFT_LLM_RETRIES`,

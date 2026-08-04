@@ -7,9 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from career_agent_workbench.errors import ModelFailureSubtype
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
+    DiagnosticEvent,
+    FailureCategory,
     WorkflowStage,
+    attempt_event,
     configuration_event,
 )
 from career_agent_workbench.workflow_status import (
@@ -162,6 +166,101 @@ def test_child_diagnostic_receives_and_preserves_capture_timestamp() -> None:
             timestamp="2042-04-10T10:00:01+00:00",
         )
         is None
+    )
+
+
+def test_status_store_accepts_legacy_model_and_optional_subtype(
+    tmp_path: Path,
+) -> None:
+    legacy = {
+        "event": "failure",
+        "stage": "v1_core",
+        "attempt": 1,
+        "total_attempts": 2,
+        "category": "model",
+    }
+    typed = attempt_event(
+        event=DiagnosticEvent.FAILURE,
+        stage=WorkflowStage.V1_JOD,
+        attempt=1,
+        total_attempts=2,
+        category=FailureCategory.MODEL,
+        failure_subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+    )
+    legacy_capture = captured_diagnostic_event(
+        legacy,
+        timestamp="2042-04-10T10:00:01+00:00",
+    )
+    typed_capture = captured_diagnostic_event(
+        typed,
+        timestamp="2042-04-10T10:00:02+00:00",
+    )
+    assert legacy_capture is not None
+    assert typed_capture is not None
+    assert "failure_subtype" not in legacy_capture
+    assert typed_capture["failure_subtype"] == "transient_http"
+    assert status_event_message(legacy_capture) == "10:00:01 v1 core failed (model)."
+    assert (
+        status_event_message(typed_capture)
+        == "10:00:02 v1 jod failed (model; transient http)."
+    )
+    assert (
+        captured_diagnostic_event(
+            {**typed, "failure_subtype": "unknown"},
+            timestamp="2042-04-10T10:00:03+00:00",
+        )
+        is None
+    )
+    assert (
+        captured_diagnostic_event(
+            {**typed, "raw_response": "unsafe"},
+            timestamp="2042-04-10T10:00:03+00:00",
+        )
+        is None
+    )
+
+    payload = _run("f" * 32, started_at="2042-04-10T10:00:00+00:00")
+    payload["events"] = [legacy_capture, typed_capture]
+    store = WorkflowStatusStore(_tmp_member(tmp_path))
+    store.save(payload)
+    recovered = store.load()[0]["events"]
+    assert "failure_subtype" not in recovered[0]
+    assert recovered[1]["failure_subtype"] == "transient_http"
+
+
+def test_status_attempt_messages_render_optional_validated_subtype() -> None:
+    legacy_retry = attempt_event(
+        event=DiagnosticEvent.RETRY_DECISION,
+        stage=WorkflowStage.V1_CORE,
+        attempt=1,
+        total_attempts=2,
+        retry=True,
+        category=FailureCategory.MODEL,
+    )
+    typed_retry = {
+        **legacy_retry,
+        "failure_subtype": ModelFailureSubtype.TRANSIENT_HTTP.value,
+    }
+    typed_timeout = attempt_event(
+        event=DiagnosticEvent.TIMEOUT,
+        stage=WorkflowStage.V1_CORE,
+        attempt=1,
+        total_attempts=2,
+        category=FailureCategory.TIMEOUT,
+        failure_subtype=ModelFailureSubtype.TIMEOUT,
+    )
+
+    assert status_event_message(legacy_retry) == (
+        "--:--:-- v1 core attempt 1/2: retrying."
+    )
+    assert status_event_message(typed_retry) == (
+        "--:--:-- v1 core attempt 1/2: retrying (transient http)."
+    )
+    assert status_event_message(typed_timeout) == (
+        "--:--:-- v1 core attempt 1/2 timed out (timeout)."
+    )
+    assert status_event_message({**legacy_retry, "failure_subtype": "unknown"}) == (
+        "--:--:-- v1 core attempt 1/2: retrying."
     )
 
 

@@ -9,6 +9,7 @@ import stat
 from collections.abc import Mapping
 from pathlib import Path
 
+from career_agent_workbench.errors import ModelFailureSubtype
 from career_agent_workbench.workflow_diagnostics import sanitized_diagnostic_event
 
 MAX_STATUS_RUNS = 8
@@ -266,6 +267,7 @@ def status_event_message(event: Mapping[str, object]) -> str:
     attempt = event.get("attempt")
     total = event.get("total_attempts")
     category = str(event.get("category") or "")
+    subtype = _failure_subtype_label(event)
     if kind == "configuration":
         return (
             f"{prefix} {stage} configured: {event.get('model')}, "
@@ -279,12 +281,17 @@ def status_event_message(event: Mapping[str, object]) -> str:
     if kind == "attempt_elapsed":
         return f"{prefix} {stage} attempt {attempt}/{total} elapsed {event.get('elapsed_seconds')}s."
     if kind == "timeout":
-        return f"{prefix} {stage} attempt {attempt}/{total} timed out."
+        suffix = f" ({subtype})" if subtype is not None else ""
+        return f"{prefix} {stage} attempt {attempt}/{total} timed out{suffix}."
     if kind == "retry_decision":
         decision = "retrying" if event.get("retry") is True else "not retrying"
-        return f"{prefix} {stage} attempt {attempt}/{total}: {decision}."
+        suffix = f" ({subtype})" if subtype is not None else ""
+        return f"{prefix} {stage} attempt {attempt}/{total}: {decision}{suffix}."
     if kind == "failure":
-        return f"{prefix} {stage} failed ({category or 'unexpected'})."
+        detail = category or "unexpected"
+        if subtype is not None:
+            detail = f"{detail}; {subtype}"
+        return f"{prefix} {stage} failed ({detail})."
     if kind == "queued":
         return f"{prefix} Background action queued."
     if kind == "stage_start":
@@ -304,6 +311,17 @@ def status_event_message(event: Mapping[str, object]) -> str:
     if kind == "workflow_completion":
         return f"{prefix} Background action completed."
     return f"{prefix} Background action failed ({category or 'unexpected'})."
+
+
+def _failure_subtype_label(event: Mapping[str, object]) -> str | None:
+    value = event.get("failure_subtype")
+    if value is None:
+        return None
+    try:
+        subtype = ModelFailureSubtype(value)
+    except (TypeError, ValueError):
+        return None
+    return subtype.value.replace("_", " ")
 
 
 def _prepare_status_directory(tmp_dir: Path) -> Path:

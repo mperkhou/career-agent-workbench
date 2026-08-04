@@ -14,9 +14,17 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from career_agent_workbench.errors import LlmError, LlmTimeoutError
+from career_agent_workbench.errors import (
+    LlmError,
+    LlmTimeoutError,
+    ModelFailureSubtype,
+    NonRetryableModelError,
+    RetryableModelError,
+    TRANSIENT_MODEL_HTTP_STATUSES,
+    TypedModelError,
+)
 
-TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+TRANSIENT_HTTP_STATUSES = TRANSIENT_MODEL_HTTP_STATUSES
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_RETRY_AFTER_SECONDS = 120.0
 MAX_BACKOFF_SECONDS = 60.0
@@ -94,10 +102,10 @@ def _content_length(response: httpx.Response) -> int | None:
 def _load_json(value: str | bytes) -> tuple[bool, object, bool]:
     """Return JSON success, parsed value, and bounded-recursion failure."""
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(value, parse_constant=_reject_json_constant)
     except RecursionError:
         recursion_error = True
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError):
         recursion_error = False
     else:
         return True, parsed, False
@@ -112,11 +120,15 @@ def _raw_decode_json(
         parsed, _ = decoder.raw_decode(value)
     except RecursionError:
         recursion_error = True
-    except json.JSONDecodeError:
+    except ValueError:
         recursion_error = False
     else:
         return True, parsed, False
     return False, None, recursion_error
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("Non-standard JSON constants are not accepted.")
 
 
 def _validated_api_base(value: str) -> str:
@@ -233,9 +245,12 @@ class ApiLlmClient:
             "X-Title": "career-agent-workbench",
         }
 
-        completion_error = LlmError("API LLM returned an empty generation.")
+        completion_error: TypedModelError = RetryableModelError(
+            subtype=ModelFailureSubtype.EMPTY_COMPLETION
+        )
         for attempt in range(1, self._retry_attempts + 1):
-            request_error = None
+            request_error: TypedModelError | None = None
+            response: httpx.Response | None = None
             try:
                 response, body = await _bounded_http_request(
                     self._client,
@@ -246,43 +261,76 @@ class ApiLlmClient:
                     headers=headers,
                 )
             except _ResponseTooLarge:
-                request_error = LlmError(
-                    "API LLM response exceeds the public size limit."
+                request_error = NonRetryableModelError(
+                    subtype=ModelFailureSubtype.RESPONSE_TOO_LARGE
                 )
             except httpx.TimeoutException:
-                request_error = LlmTimeoutError("API LLM request timed out.")
+                request_error = LlmTimeoutError()
+            except httpx.ConnectError:
+                request_error = RetryableModelError(
+                    subtype=ModelFailureSubtype.TRANSPORT_CONNECT
+                )
+            except httpx.ReadError:
+                request_error = RetryableModelError(
+                    subtype=ModelFailureSubtype.TRANSPORT_READ
+                )
+            except httpx.RemoteProtocolError:
+                request_error = RetryableModelError(
+                    subtype=ModelFailureSubtype.TRANSPORT_PROTOCOL
+                )
+            except httpx.ProtocolError:
+                request_error = NonRetryableModelError(
+                    subtype=ModelFailureSubtype.UNEXPECTED_MODEL
+                )
             except httpx.HTTPError:
-                request_error = LlmError("API LLM request failed.")
+                request_error = NonRetryableModelError(
+                    subtype=ModelFailureSubtype.UNEXPECTED_MODEL
+                )
+            except Exception:
+                request_error = NonRetryableModelError(
+                    subtype=ModelFailureSubtype.UNEXPECTED_MODEL
+                )
             if request_error is not None:
                 raise request_error
 
+            assert response is not None
             if not 200 <= response.status_code < 300:
+                retry_after = _bounded_retry_after(response)
+                if response.status_code in TRANSIENT_HTTP_STATUSES:
+                    status_error: TypedModelError = RetryableModelError(
+                        subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+                        http_status=response.status_code,
+                        retry_after_seconds=retry_after,
+                    )
+                else:
+                    status_error = NonRetryableModelError(
+                        subtype=ModelFailureSubtype.PERMANENT_HTTP,
+                        http_status=response.status_code,
+                    )
                 if (
-                    response.status_code in TRANSIENT_HTTP_STATUSES
+                    isinstance(status_error, RetryableModelError)
                     and attempt < self._retry_attempts
                 ):
                     await self._sleep(
-                        _retry_delay_seconds(
-                            response,
+                        _typed_retry_delay_seconds(
+                            status_error,
                             attempt,
                             self._retry_backoff_seconds,
                         )
                     )
                     continue
-                raise LlmError(
-                    f"API LLM request failed with HTTP status {response.status_code}."
-                )
+                raise status_error
 
             data = _response_json(body)
-            text, completion_error, retryable = _completion_text(data)
+            text, completion_error = _completion_text(data)
             if completion_error is None:
                 return text
-            if not retryable:
+            if not isinstance(completion_error, RetryableModelError):
                 raise completion_error
             if attempt < self._retry_attempts:
                 await self._sleep(
-                    _retry_delay_seconds(
-                        response,
+                    _typed_retry_delay_seconds(
+                        completion_error,
                         attempt,
                         self._retry_backoff_seconds,
                     )
@@ -294,31 +342,63 @@ class ApiLlmClient:
 def _response_json(body: bytes) -> Mapping[str, Any]:
     loaded, value, _ = _load_json(body)
     if not loaded:
-        raise LlmError("API LLM returned a non-JSON response.")
+        raise NonRetryableModelError(subtype=ModelFailureSubtype.MALFORMED_ENVELOPE)
     if not isinstance(value, Mapping):
-        raise LlmError("API LLM returned an invalid response object.")
+        raise NonRetryableModelError(subtype=ModelFailureSubtype.MALFORMED_ENVELOPE)
     return value
 
 
 def _completion_text(
     data: Mapping[str, Any],
-) -> tuple[str, LlmError | None, bool]:
+) -> tuple[str, TypedModelError | None]:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
-        return "", LlmError("API LLM returned no completion choices."), False
+        return "", NonRetryableModelError(
+            subtype=ModelFailureSubtype.MALFORMED_ENVELOPE
+        )
     choice = choices[0]
     if not isinstance(choice, Mapping):
-        return "", LlmError("API LLM returned malformed completion data."), False
+        return "", NonRetryableModelError(
+            subtype=ModelFailureSubtype.MALFORMED_ENVELOPE
+        )
     message = choice.get("message")
     if not isinstance(message, Mapping):
-        return "", LlmError("API LLM returned malformed completion data."), False
+        return "", NonRetryableModelError(
+            subtype=ModelFailureSubtype.MALFORMED_ENVELOPE
+        )
     text = message.get("content")
     if not isinstance(text, str):
-        return "", LlmError("API LLM returned malformed completion data."), False
+        return "", NonRetryableModelError(
+            subtype=ModelFailureSubtype.MALFORMED_ENVELOPE
+        )
     stripped = _strip_thinking(text.strip())
     if not stripped:
-        return "", LlmError("API LLM returned an empty generation."), True
-    return stripped, None, False
+        return "", RetryableModelError(subtype=ModelFailureSubtype.EMPTY_COMPLETION)
+    return stripped, None
+
+
+def _bounded_retry_after(response: httpx.Response) -> float | None:
+    retry_after = response.headers.get("retry-after")
+    if retry_after is None:
+        return None
+    try:
+        parsed = float(retry_after)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return min(parsed, MAX_RETRY_AFTER_SECONDS)
+
+
+def _typed_retry_delay_seconds(
+    error: RetryableModelError,
+    attempt: int,
+    base_delay_seconds: float,
+) -> float:
+    if error.retry_after_seconds is not None:
+        return error.retry_after_seconds
+    exponent = max(0, int(attempt) - 1)
+    return min(base_delay_seconds * (2**exponent), MAX_BACKOFF_SECONDS)
 
 
 def _retry_delay_seconds(
@@ -326,16 +406,12 @@ def _retry_delay_seconds(
     attempt: int,
     base_delay_seconds: float,
 ) -> float:
-    retry_after = response.headers.get("retry-after")
-    if retry_after is not None:
-        try:
-            parsed = float(retry_after)
-        except (TypeError, ValueError, OverflowError):
-            parsed = -1.0
-        if math.isfinite(parsed) and parsed >= 0:
-            return min(parsed, MAX_RETRY_AFTER_SECONDS)
-    exponent = max(0, int(attempt) - 1)
-    return min(base_delay_seconds * (2**exponent), MAX_BACKOFF_SECONDS)
+    error = RetryableModelError(
+        subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+        http_status=response.status_code,
+        retry_after_seconds=_bounded_retry_after(response),
+    )
+    return _typed_retry_delay_seconds(error, attempt, base_delay_seconds)
 
 
 def _parse_json_object(text: str) -> Mapping[str, Any]:
@@ -344,14 +420,16 @@ def _parse_json_object(text: str) -> Mapping[str, Any]:
         return value
     if isinstance(value, list):
         return {"queries": value}
-    raise LlmError("API LLM did not return a JSON object or array.")
+    raise NonRetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
 
 
 def _parse_json_value(text: str) -> object:
     stripped = text.strip()
     loaded, value, recursive = _load_json(stripped)
     if recursive:
-        raise LlmError("API LLM did not return valid JSON.")
+        raise NonRetryableModelError(
+            subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
+        )
     if loaded:
         return value
 
@@ -362,20 +440,24 @@ def _parse_json_value(text: str) -> object:
     ):
         loaded, value, recursive = _load_json(match.group(1).strip())
         if recursive:
-            raise LlmError("API LLM did not return valid JSON.")
+            raise NonRetryableModelError(
+                subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
+            )
         if loaded:
             return value
 
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(parse_constant=_reject_json_constant)
     for index, character in enumerate(stripped):
         if character not in "[{":
             continue
         loaded, value, recursive = _raw_decode_json(decoder, stripped[index:])
         if recursive:
-            raise LlmError("API LLM did not return valid JSON.")
+            raise NonRetryableModelError(
+                subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
+            )
         if loaded and isinstance(value, (Mapping, list)):
             return value
-    raise LlmError("API LLM did not return valid JSON.")
+    raise NonRetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
 
 
 def _strip_thinking(text: str) -> str:

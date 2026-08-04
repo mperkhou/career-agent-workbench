@@ -14,7 +14,11 @@ import yaml
 
 import career_agent_workbench.artifact_exports as artifact_exports
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
-from career_agent_workbench.errors import LlmTimeoutError
+from career_agent_workbench.errors import (
+    LlmTimeoutError,
+    ModelFailureSubtype,
+    RetryableModelError,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_NAMES = (
@@ -725,10 +729,13 @@ async def test_first_draft_generation_sanitizes_each_stage_failure(
             retries=2,
         )
 
-    assert module._failure_diagnostic(raised.value) == {
+    expected_diagnostic = {
         "category": expected_category,
         "stage": expected_stage,
     }
+    if error_family == "model":
+        expected_diagnostic["failure_subtype"] = "unexpected_model"
+    assert module._failure_diagnostic(raised.value) == expected_diagnostic
     assert str(raised.value) == "First-draft record processing failed."
     assert "unsafe" not in str(raised.value)
     if boundary == "core_request":
@@ -753,6 +760,44 @@ async def test_first_draft_retries_only_typed_timeout_initial_plus_two() -> None
 
     assert await module._with_retries(operation, retries=2) == "accepted"
     assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_first_draft_retries_typed_api_transient_with_exact_boundaries(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RetryableModelError(
+                subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+                http_status=503,
+                retry_after_seconds=0,
+            )
+        return "accepted"
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    assert await module._with_retries(operation, retries=2, sleep=sleep) == "accepted"
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().err.splitlines()
+        if line.strip()
+    ]
+    starts = [event for event in events if event["event"] == "attempt_start"]
+    assert attempts == len(starts) == 3
+    assert [event["attempt"] for event in starts] == [1, 2, 3]
+    assert all(event["total_attempts"] == 3 for event in starts)
+    decisions = [event for event in events if event["event"] == "retry_decision"]
+    assert [event["retry"] for event in decisions] == [True, True]
+    assert all(event["failure_subtype"] == "transient_http" for event in decisions)
+    assert sleeps == [0.0, 0.0]
 
 
 @pytest.mark.asyncio

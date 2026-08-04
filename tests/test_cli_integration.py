@@ -27,7 +27,13 @@ from career_agent_workbench.config import (
     load_runtime_config,
 )
 from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest
-from career_agent_workbench.errors import LlmError, LlmTimeoutError
+from career_agent_workbench.errors import (
+    LlmError,
+    LlmTimeoutError,
+    ModelFailureSubtype,
+    NonRetryableModelError,
+    RetryableModelError,
+)
 from career_agent_workbench.workflows import matching
 
 
@@ -526,10 +532,31 @@ def test_second_pass_config_only_is_model_and_state_free(
     ("failures", "expected_calls", "expected_attempt"),
     [
         ((LlmTimeoutError("synthetic"),), 2, 2),
+        (
+            (
+                RetryableModelError(
+                    subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+                    http_status=503,
+                    retry_after_seconds=0,
+                ),
+            ),
+            2,
+            2,
+        ),
         ((LlmError("synthetic"),), 1, None),
+        (
+            (
+                NonRetryableModelError(
+                    subtype=ModelFailureSubtype.PERMANENT_HTTP,
+                    http_status=400,
+                ),
+            ),
+            1,
+            None,
+        ),
     ],
 )
-def test_second_pass_retries_only_typed_timeouts(
+def test_second_pass_uses_typed_retry_contract(
     monkeypatch,
     failures: tuple[Exception, ...],
     expected_calls: int,
@@ -545,7 +572,7 @@ def test_second_pass_retries_only_typed_timeouts(
             self.calls += 1
             if self.calls <= len(failures):
                 raise failures[self.calls - 1]
-            return "synthetic response"
+            return '{"synthetic": true}'
 
         async def aclose(self):
             return None
@@ -577,6 +604,66 @@ def test_second_pass_retries_only_typed_timeouts(
         result = runner.run(request)
         assert result.model_metadata["attempt"] == expected_attempt
     assert client.calls == expected_calls
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["not-json", '{"score": NaN}', '{"score": Infinity}'],
+)
+def test_second_pass_invalid_json_stops_before_completion(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+    response: str,
+) -> None:
+    class FakeClient:
+        model = "synthetic-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_text(self, _prompt):
+            self.calls += 1
+            return response
+
+        async def aclose(self):
+            return None
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=3,
+        timeout_seconds=600,
+    )
+    request = ModelRequest(
+        prompt="Synthetic prompt.",
+        config=CodexModelConfig(
+            model="synthetic-model",
+            reasoning_effort="",
+            workflow="refinement",
+        ),
+    )
+
+    with pytest.raises(NonRetryableModelError) as raised:
+        runner.run(request)
+
+    assert raised.value.subtype is ModelFailureSubtype.INVALID_GENERATION_JSON
+    assert client.calls == 1
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().err.splitlines()
+        if line.strip()
+    ]
+    assert len([event for event in events if event["event"] == "attempt_start"]) == 1
+    assert not any(event["event"] == "attempt_completion" for event in events)
+    decision = next(event for event in events if event["event"] == "retry_decision")
+    assert decision["retry"] is False
+    assert decision["failure_subtype"] == "invalid_generation_json"
 
 
 def test_second_pass_isolates_rows_and_artifact_exports(

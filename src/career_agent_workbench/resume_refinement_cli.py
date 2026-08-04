@@ -8,7 +8,6 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from time import monotonic
 
 from career_agent_workbench.artifact_exports import export_rendered_resume
 from career_agent_workbench.application_state import (
@@ -23,19 +22,17 @@ from career_agent_workbench.cli_paths import (
 )
 from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest, ModelResult
 from career_agent_workbench.config import Settings, WorkspaceMember
-from career_agent_workbench.errors import ModelTimeoutError
+from career_agent_workbench.errors import ModelFailureSubtype, NonRetryableModelError
 from career_agent_workbench.llm import build_llm_client
 from career_agent_workbench.resume_refinement import refine_resume_for_job
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
-    DiagnosticEvent,
-    FailureCategory,
     WorkflowStage,
-    attempt_event,
     configuration_event,
     emit_diagnostic,
     invocation_argument_source,
 )
+from career_agent_workbench.workflow_retry import run_model_operation
 
 DEFAULT_SECOND_PASS_TIMEOUT_SECONDS = 600.0
 DEFAULT_WORKFLOW_RETRY_COUNT = 1
@@ -67,105 +64,21 @@ class _ConfiguredLlmRunner:
                 timeout_seconds=self._timeout_seconds,
             )
             try:
-                for attempt in range(self._retries + 1):
-                    attempt_number = attempt + 1
-                    total_attempts = self._retries + 1
-                    emit_diagnostic(
-                        attempt_event(
-                            event=DiagnosticEvent.ATTEMPT_START,
-                            stage=WorkflowStage.V2_CRITIQUE,
-                            attempt=attempt_number,
-                            total_attempts=total_attempts,
-                        )
-                    )
-                    started = monotonic()
-                    try:
-                        response = await client.generate_text(request.prompt)
-                    except ModelTimeoutError:
-                        elapsed = monotonic() - started
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                elapsed_seconds=elapsed,
-                            )
-                        )
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.TIMEOUT,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                category=FailureCategory.TIMEOUT,
-                            )
-                        )
-                        retry = attempt < self._retries
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.RETRY_DECISION,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                retry=retry,
-                                category=FailureCategory.TIMEOUT,
-                            )
-                        )
-                        if not retry:
-                            raise
-                        continue
-                    except Exception:
-                        elapsed = monotonic() - started
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                elapsed_seconds=elapsed,
-                            )
-                        )
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.RETRY_DECISION,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                retry=False,
-                                category=FailureCategory.MODEL,
-                            )
-                        )
-                        emit_diagnostic(
-                            attempt_event(
-                                event=DiagnosticEvent.FAILURE,
-                                stage=WorkflowStage.V2_CRITIQUE,
-                                attempt=attempt_number,
-                                total_attempts=total_attempts,
-                                category=FailureCategory.MODEL,
-                            )
-                        )
-                        raise
-                    elapsed = monotonic() - started
-                    emit_diagnostic(
-                        attempt_event(
-                            event=DiagnosticEvent.ATTEMPT_ELAPSED,
-                            stage=WorkflowStage.V2_CRITIQUE,
-                            attempt=attempt_number,
-                            total_attempts=total_attempts,
-                            elapsed_seconds=elapsed,
-                        )
-                    )
-                    emit_diagnostic(
-                        attempt_event(
-                            event=DiagnosticEvent.ATTEMPT_COMPLETION,
-                            stage=WorkflowStage.V2_CRITIQUE,
-                            attempt=attempt_number,
-                            total_attempts=total_attempts,
-                        )
-                    )
-                    return response, client.model, attempt_number
-                raise AssertionError("unreachable retry loop")
+                attempt_count = 0
+
+                async def invoke() -> str:
+                    nonlocal attempt_count
+                    attempt_count += 1
+                    response = await client.generate_text(request.prompt)
+                    _validate_generation_json_syntax(response)
+                    return response
+
+                response = await run_model_operation(
+                    invoke,
+                    retries=self._retries,
+                    stage=WorkflowStage.V2_CRITIQUE,
+                )
+                return response, client.model, attempt_count
             finally:
                 await client.aclose()
 
@@ -181,6 +94,19 @@ class _ConfiguredLlmRunner:
                 "version": 1,
             },
         )
+
+
+def _validate_generation_json_syntax(response: str) -> None:
+    try:
+        json.loads(response, parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError):
+        raise NonRetryableModelError(
+            subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
+        ) from None
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("Non-standard JSON constants are not accepted.")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

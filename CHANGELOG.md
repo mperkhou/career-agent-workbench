@@ -37,6 +37,12 @@
   ownership/leases/recovery/correlation/final-summary state, composite-Make
   ownership, and structured viewing are deferred to a future feature release,
   and another live traversal remains separately gated.
+- After G03D approval, renewed exactly one synthetic `demo-platform-001`
+  traversal under the repaired typed API retry contract: a sanitized
+  model-free preflight must pass before one v1 → v2 → regular-manual →
+  highlighting sequence, each retry setting remains two retries/three total
+  attempts, four external snapshot sets remain retained, and the workflow
+  stops at the first failed stage without an operator rerun.
 
 ## [2.0.0] - In progress
 

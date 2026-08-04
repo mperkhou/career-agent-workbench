@@ -27,6 +27,7 @@ from career_agent_workbench.application_resume import (
     replace_experience_job_bullets_from_text_response,
 )
 from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
     ApplicationStateStore,
     ApplicationWorkflowSnapshot,
     AtsFields,
@@ -290,7 +291,7 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
         selected = set(args.job_ids or ())
         records = [
             item
-            for item in store.list_applications("active", limit=10_000)
+            for item in store.list_applications("active", limit=MAX_QUERY_RESULTS)
             if not selected or item.job_id in selected
         ]
         limit = None if args.limit is None else max(0, args.limit)

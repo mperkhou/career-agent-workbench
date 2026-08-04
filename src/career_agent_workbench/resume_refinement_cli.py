@@ -10,7 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from career_agent_workbench.artifact_exports import export_rendered_resume
-from career_agent_workbench.application_state import ApplicationStateStore
+from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
+    ApplicationStateStore,
+)
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
@@ -155,7 +158,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected = [item.strip() for item in args.job_id or [] if item.strip()]
         if args.all_active:
             selected.extend(
-                item.job_id for item in store.list_applications("active", limit=10_000)
+                item.job_id
+                for item in store.list_applications("active", limit=MAX_QUERY_RESULTS)
             )
         job_ids = list(dict.fromkeys(selected))
         if not job_ids:

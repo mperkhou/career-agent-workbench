@@ -459,6 +459,11 @@ def test_refinement_console_composes_resolved_runner_and_workflow(
         def __init__(self, supplied_paths):
             captured["store_paths"] = supplied_paths
 
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            assert limit == MAX_QUERY_RESULTS
+            return (SimpleNamespace(job_id="fictional-job"),)
+
     class FakeRunner:
         def __init__(self, supplied_settings, **kwargs):
             captured["runner"] = (supplied_settings, kwargs)
@@ -474,7 +479,7 @@ def test_refinement_console_composes_resolved_runner_and_workflow(
     monkeypatch.setattr(resume_refinement_cli, "_ConfiguredLlmRunner", FakeRunner)
     monkeypatch.setattr(resume_refinement_cli, "refine_resume_for_job", fake_refine)
 
-    assert resume_refinement_cli.main(["--job-id", "fictional-job"]) == 0
+    assert resume_refinement_cli.main(["--all-active"]) == 0
     assert captured["store_paths"] is paths
     assert captured["runner"][0] is settings
     assert captured["workflow"]["paths"] is paths

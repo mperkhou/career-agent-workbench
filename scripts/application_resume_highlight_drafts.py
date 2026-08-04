@@ -9,7 +9,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from career_agent_workbench.artifact_exports import export_rendered_resume
-from career_agent_workbench.application_state import ApplicationStateStore
+from career_agent_workbench.application_state import (
+    MAX_QUERY_RESULTS,
+    ApplicationStateStore,
+)
 from career_agent_workbench.cli_paths import (
     CliConfigurationError,
     add_runtime_path_arguments,
@@ -121,7 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected = set(args.job_ids or ())
         records = [
             item
-            for item in store.list_applications("active", limit=10_000)
+            for item in store.list_applications("active", limit=MAX_QUERY_RESULTS)
             if not selected or item.job_id in selected
         ]
         if args.limit is not None:

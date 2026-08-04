@@ -198,7 +198,9 @@ async def test_first_draft_dry_run_counts_only_eligible_without_boundaries(
         def __init__(self, _paths):
             pass
 
-        def list_applications(self, *_args, **_kwargs):
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            assert limit == module.MAX_QUERY_RESULTS
             return records
 
         def get_workflow_snapshot(self, job_id):
@@ -238,6 +240,93 @@ async def test_first_draft_dry_run_counts_only_eligible_without_boundaries(
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"candidates": expected, "dry_run": True}
     assert reads
+
+
+def test_aro_regeneration_uses_canonical_query_bound(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_regenerate_aros.py")
+    paths = WorkspacePaths(
+        database=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "artifacts",
+        master_resume=tmp_path / "resume.yml",
+    )
+
+    class FakeStore:
+        def __init__(self, configured_paths):
+            assert configured_paths is paths
+
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            assert limit == module.MAX_QUERY_RESULTS
+            return ()
+
+    monkeypatch.setattr(
+        module,
+        "load_command_config",
+        lambda *_a, **_k: RuntimeConfig(
+            paths=paths,
+            settings=Settings(),
+            env_file=None,
+        ),
+    )
+    monkeypatch.setattr(module, "ApplicationStateStore", FakeStore)
+
+    assert module.main([]) == 0
+    assert json.loads(capsys.readouterr().out) == {"processed": 0}
+
+
+def test_highlighting_uses_canonical_query_bound(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_highlight_drafts.py")
+    paths = WorkspacePaths(
+        root=tmp_path,
+        database=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "artifacts",
+        master_resume=tmp_path / "resume.yml",
+        master_resume_text=tmp_path / "resume.txt",
+        tmp_dir=tmp_path / "tmp",
+    )
+
+    class FakeStore:
+        def __init__(self, configured_paths):
+            assert configured_paths is paths
+
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            assert limit == module.MAX_QUERY_RESULTS
+            return ()
+
+    monkeypatch.setattr(
+        module,
+        "load_command_config",
+        lambda *_a, **_k: RuntimeConfig(
+            paths=paths,
+            settings=Settings(),
+            env_file=None,
+        ),
+    )
+    monkeypatch.setattr(module, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(module, "build_codex_runner", lambda **_k: object())
+    monkeypatch.setattr(
+        module,
+        "with_model_request_policy",
+        lambda runner, **_k: runner,
+    )
+
+    assert module.main(["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "dry_run": True,
+        "failed": 0,
+        "processed": 0,
+        "requires_human_review": True,
+        "selection_changed": False,
+    }
 
 
 @pytest.mark.asyncio

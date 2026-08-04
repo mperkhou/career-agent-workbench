@@ -9,6 +9,8 @@ from career_agent_workbench.config import Settings
 from career_agent_workbench.errors import WorkflowError
 from career_agent_workbench.ollama import OllamaClient
 
+WORKFLOW_API_RETRY_ATTEMPTS = 1
+
 
 def build_llm_client(
     settings: Settings,
@@ -49,6 +51,7 @@ def build_llm_client(
             if timeout_seconds is None
             else timeout_seconds
         ),
+        retry_attempts=WORKFLOW_API_RETRY_ATTEMPTS,
         transport=transport,
     )
 

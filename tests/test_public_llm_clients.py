@@ -1213,3 +1213,38 @@ def test_settings_selection_safe_label_missing_key_and_zero_request() -> None:
             transport=transport,
         )
     assert calls == 0
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        httpx.Response(429),
+        _api_response("<think>reasoning without a completion</think>"),
+    ),
+)
+def test_workflow_api_client_does_not_hide_non_timeout_retries(
+    response: httpx.Response,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return response
+
+    settings = replace(
+        Settings(),
+        llm_api_base_url="https://api.example.invalid",
+        llm_api_model="synthetic-api-model",
+        llm_api_key="synthetic-key",
+        llm_provider="api",
+    )
+    client = build_llm_client(settings, transport=httpx.MockTransport(handler))
+
+    async def scenario() -> None:
+        with pytest.raises(LlmError):
+            await client.generate_text("synthetic prompt")
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1

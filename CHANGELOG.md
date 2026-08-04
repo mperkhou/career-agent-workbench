@@ -24,6 +24,11 @@
   bounded recovery run so a synthetic live traversal can identify a local
   stage and safe exception category without retaining model traffic or career
   content, while preserving all external variant snapshot directories.
+- Added a pre-live execution-parity phase for mature-equivalent 300/600/900
+  timeout defaults, timeout-only retry semantics, Luna/high highlighting,
+  presence-aware Make/CLI/private-dotenv precedence, model-free effective-
+  configuration checks, row isolation, and bounded content-free Flask action
+  logs before any further synthetic provider run.
 
 ## [2.0.0] - In progress
 

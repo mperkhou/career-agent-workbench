@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -30,6 +31,17 @@ MANIFEST = {
     Path("profile/MP-MASTER-RESUME.txt"),
     Path("jobs/demo-platform-engineer.json"),
 }
+JOB_DESCRIPTION_SECTIONS = (
+    "PUBLIC DEMONSTRATION NOTICE",
+    "ABOUT RIVERMARK",
+    "ROLE IMPACT",
+    "WHAT YOU WILL DO",
+    "REQUIRED QUALIFICATIONS",
+    "PREFERRED QUALIFICATIONS",
+    "WORKING MODEL AND COLLABORATION",
+    "COMPENSATION AND BENEFITS",
+    "APPLICATION CONTEXT",
+)
 
 
 def _load_factory():
@@ -288,7 +300,38 @@ def test_tracked_demo_source_is_bounded_coherent_and_fictional() -> None:
     assert job.workplace_type == "remote"
     assert job.employment_type == "full_time"
     assert job.seniority_level == "mid_senior"
-    assert "Python" in (job.description or "")
+    description = job.description or ""
+    description_words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#./'-]*", description)
+    assert 900 <= len(description_words) <= 1_300
+    assert 6_500 <= len(description.encode("utf-8")) <= 10_000
+    section_positions = [
+        description.index(f"{heading}\n") for heading in JOB_DESCRIPTION_SECTIONS
+    ]
+    assert section_positions == sorted(section_positions)
+    assert 20 <= sum(line.startswith("- ") for line in description.splitlines()) <= 35
+    assert "wholly fictional job posting" in description
+    assert "offline public software demonstration" in description
+    assert "talent@rivermark.example.test" in description
+    assert all(
+        email.endswith("@rivermark.example.test")
+        for email in re.findall(r"[\w.+-]+@(?:[\w-]+\.)+[\w-]+", description)
+    )
+    assert "<" not in description and ">" not in description
+    assert "thin demo" not in description.casefold()
+    assert "Demo Platform Engineer" not in description
+    supported_terms = (
+        "Python",
+        "Ansible",
+        "AWX",
+        "OpenSearch",
+        "Grafana",
+        "Prometheus",
+    )
+    assert all(term in description and term in source_text for term in supported_terms)
+    preferred_gaps = ("Argo CD", "Backstage", "Crossplane", "OpenTelemetry")
+    assert all(
+        term in description and term not in source_text for term in preferred_gaps
+    )
     blacklist = (SOURCE / ".blacklist").read_text("utf-8").strip()
     assert blacklist == "Granite Harbor Consulting"
     assert blacklist != job.company
@@ -312,9 +355,10 @@ def test_factory_materializes_one_governed_demo_and_flask_row(tmp_path: Path) ->
     assert record.job_id == "demo-platform-001"
     assert record.company == "Rivermark Platform Services"
     assert record.job_title == "Senior Platform Automation Engineer"
-    assert record.job_description and "Python automation services" in (
-        record.job_description
+    job = JobDetails.model_validate_json(
+        (SOURCE / "jobs/demo-platform-engineer.json").read_text("utf-8")
     )
+    assert record.job_description == job.description
     assert record.prompt_job_description
     assert record.selected_resume_variant == "v1"
     assert record.resume_variant_selection_mode == "auto"
@@ -350,6 +394,13 @@ def test_factory_materializes_one_governed_demo_and_flask_row(tmp_path: Path) ->
     assert response.status_code == 200
     assert b"demo-platform-001" in response.data
     assert b"Rivermark Platform Services" in response.data
+    description_response = app.test_client().get("/descriptions/demo-platform-001")
+    assert description_response.status_code == 200
+    description_page = description_response.get_data(as_text=True)
+    assert all(heading in description_page for heading in JOB_DESCRIPTION_SECTIONS)
+    assert "no applicant data should be entered into this fixture" in description_page
+    assert "talent@rivermark.example.test" in description_page
+    assert "&lt;script" not in description_page.casefold()
     assert _source_digests() == before
 
 

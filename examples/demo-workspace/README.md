@@ -13,6 +13,7 @@ private state.
 The tracked source intentionally contains no SQLite database, `output/` or
 `tmp/` tree, PDF, model/provider traffic, browser output, or generated binary
 artifact. Its text and neutral Master Resume Object contain the same public
-evidence. The demo factory creates only one tracker row, one v1 resume object,
-one cover-letter object, and three readable text examples in the explicit
-workspace.
+evidence. The target job is a full-size fictional posting with realistic
+overlap and deliberate preferred-skill gaps. The demo factory creates only one
+tracker row, one v1 resume object, one cover-letter object, and three readable
+text examples in the explicit workspace.

@@ -43,6 +43,17 @@ _EXPECTED_SOURCE_FILES = frozenset(
     }
 )
 _MAX_SOURCE_BYTES = 2_000_000
+_EXPECTED_JOB_DESCRIPTION_SECTIONS = (
+    "PUBLIC DEMONSTRATION NOTICE",
+    "ABOUT RIVERMARK",
+    "ROLE IMPACT",
+    "WHAT YOU WILL DO",
+    "REQUIRED QUALIFICATIONS",
+    "PREFERRED QUALIFICATIONS",
+    "WORKING MODEL AND COLLABORATION",
+    "COMPENSATION AND BENEFITS",
+    "APPLICATION CONTEXT",
+)
 
 
 class DemoWorkspaceError(Exception):
@@ -86,6 +97,19 @@ def _validate_source(source: Path) -> JobDetails:
         or job.company != "Rivermark Platform Services"
         or job.title != "Senior Platform Automation Engineer"
         or job.description is None
+    ):
+        raise DemoWorkspaceError(_ERROR)
+    description = job.description
+    section_positions = [
+        description.find(f"{heading}\n")
+        for heading in _EXPECTED_JOB_DESCRIPTION_SECTIONS
+    ]
+    if (
+        not 900 <= len(description.split()) <= 1_300
+        or section_positions != sorted(section_positions)
+        or any(position < 0 for position in section_positions)
+        or sum(line.startswith("- ") for line in description.splitlines()) < 20
+        or "talent@rivermark.example.test" not in description
     ):
         raise DemoWorkspaceError(_ERROR)
     return job
@@ -133,10 +157,11 @@ def _resume_for_job(runtime: RuntimeConfig, job: JobDetails) -> dict[str, object
     description = create_job_opening_description_object(
         trimmed_job_description=prompt_jod,
         requirements_response=[
-            "Build reliable Python automation services with focused tests.",
-            "Maintain Ansible and AWX workflows for shared platforms.",
-            "Improve OpenSearch, Grafana, and Prometheus observability.",
-            "Document operational runbooks and human review checkpoints.",
+            "Build and support tested Python services and REST interfaces for automation workflows.",
+            "Maintain Ansible, AWX, and Terraform workflows across shared cloud platforms.",
+            "Improve OpenSearch, Grafana, and Prometheus reliability evidence.",
+            "Participate in support, incident follow-up, documentation, and human review checkpoints.",
+            "Preferred experience includes Kubernetes controllers and GitOps platform tooling.",
         ],
     )
     return attach_job_opening_description_object(

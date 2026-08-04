@@ -20,6 +20,10 @@
 - Added a pre-call compatibility repair requirement so public v1, ARO
   regeneration, v2, and highlighting batch readers use the canonical bounded
   application-query maximum instead of an invalid oversized literal.
+- Added a content-free first-draft failure diagnostic and one explicitly
+  bounded recovery run so a synthetic live traversal can identify a local
+  stage and safe exception category without retaining model traffic or career
+  content, while preserving all external variant snapshot directories.
 
 ## [2.0.0] - In progress
 

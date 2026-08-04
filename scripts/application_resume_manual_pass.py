@@ -34,9 +34,6 @@ from career_agent_workbench.workflow_diagnostics import (
     invocation_argument_source,
 )
 
-DEFAULT_CODEX_TIMEOUT_SECONDS = 900.0
-DEFAULT_WORKFLOW_RETRY_COUNT = 1
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -73,9 +70,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=DEFAULT_CODEX_TIMEOUT_SECONDS,
+        default=None,
     )
-    parser.add_argument("--retry-count", type=int, default=DEFAULT_WORKFLOW_RETRY_COUNT)
+    parser.add_argument("--retry-count", type=int, default=None)
     return parser
 
 
@@ -84,10 +81,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
     try:
-        timeout_seconds = args.timeout_seconds
-        retry_count = args.retry_count
-        timeout_explicit = _argument_present(raw_argv, "--timeout-seconds")
-        retry_explicit = _argument_present(raw_argv, "--retry-count")
         profile_explicit = _argument_present(raw_argv, "--manual-pass-profile")
         config = load_command_config(
             args,
@@ -106,8 +99,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             setting_overrides={
                 "manual_pass_codex_model": args.codex_model,
                 "manual_pass_codex_reasoning_effort": (args.codex_reasoning_effort),
+                "codex_timeout_seconds": args.timeout_seconds,
+                "codex_retries": args.retry_count,
             },
         )
+        timeout_seconds = config.settings.codex_timeout_seconds
+        retry_count = config.settings.codex_retries
         profile = args.manual_pass_profile or DEFAULT_MANUAL_PASS_PROFILE
         model_source = config.setting_source("manual_pass_codex_model")
         effort_source = config.setting_source("manual_pass_codex_reasoning_effort")
@@ -150,16 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         if effort_source == ConfigurationSource.DEFAULT.value
                         else effort_source
                     ),
-                    "timeout": (
-                        ConfigurationSource.DEFAULT
-                        if not timeout_explicit
-                        else invocation_argument_source()
-                    ),
-                    "retry_count": (
-                        ConfigurationSource.DEFAULT
-                        if not retry_explicit
-                        else invocation_argument_source()
-                    ),
+                    "timeout": config.setting_source("codex_timeout_seconds"),
+                    "retry_count": config.setting_source("codex_retries"),
                 },
                 workspace_configured=config.paths.root is not None,
                 profile=resolved_model.profile.key.value,

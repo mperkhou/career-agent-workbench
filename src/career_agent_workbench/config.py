@@ -101,6 +101,8 @@ class RuntimeOverrides:
     second_pass_model: str | None = None
     codex_model: str | None = None
     codex_reasoning_effort: str | None = None
+    codex_timeout_seconds: float | str | None = None
+    codex_retries: int | str | None = None
     manual_pass_codex_model: str | None = None
     manual_pass_codex_reasoning_effort: str | None = None
     highlight_codex_model: str | None = None
@@ -177,6 +179,8 @@ class Settings:
     second_pass_model: str = "z-ai/glm-5.2"
     codex_model: str = ""
     codex_reasoning_effort: str = ""
+    codex_timeout_seconds: float = 900.0
+    codex_retries: int = 1
     manual_pass_codex_model: str = ""
     manual_pass_codex_reasoning_effort: str = ""
     highlight_codex_model: str = "gpt-5.6-luna"
@@ -276,6 +280,7 @@ _FLOAT_SETTING_SPECS = (
     ("timeout_seconds", "TIMEOUT_SECONDS"),
     ("ollama_timeout_seconds", "OLLAMA_TIMEOUT_SECONDS"),
     ("llm_api_timeout_seconds", "LLM_API_TIMEOUT_SECONDS"),
+    ("codex_timeout_seconds", "CODEX_TIMEOUT_SECONDS"),
 )
 
 
@@ -641,6 +646,10 @@ def _resolve_settings(
             if layer == "explicit"
             else layer
         )
+    if resolved["codex_timeout_seconds"] > 1_800:
+        raise InvalidConfigurationError(
+            "Invalid configuration for 'codex_timeout_seconds'."
+        )
 
     max_results, max_results_layer = _select_value(
         explicit.max_results,
@@ -659,6 +668,25 @@ def _resolve_settings(
         else explicit_source
         if max_results_layer == "explicit"
         else max_results_layer
+    )
+
+    codex_retries, codex_retries_layer = _select_value(
+        explicit.codex_retries,
+        "CODEX_RETRIES",
+        process_values,
+        dotenv_data,
+    )
+    resolved["codex_retries"] = (
+        defaults.codex_retries
+        if codex_retries is _MISSING or _is_blank(codex_retries)
+        else _parse_retry_count(codex_retries, "codex_retries")
+    )
+    sources["codex_retries"] = (
+        ConfigurationSource.DEFAULT.value
+        if codex_retries is _MISSING or _is_blank(codex_retries)
+        else explicit_source
+        if codex_retries_layer == "explicit"
+        else codex_retries_layer
     )
 
     provider, provider_layer = _select_value(
@@ -792,6 +820,20 @@ def _parse_positive_int(value: Any, field: str) -> int:
             f"Invalid configuration for '{field}'."
         ) from None
     if parsed <= 0:
+        raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
+    return parsed
+
+
+def _parse_retry_count(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
+    try:
+        parsed = int(value)
+    except Exception:  # noqa: BLE001 - sanitize supported conversion failures
+        raise InvalidConfigurationError(
+            f"Invalid configuration for '{field}'."
+        ) from None
+    if not 0 <= parsed <= 3:
         raise InvalidConfigurationError(f"Invalid configuration for '{field}'.")
     return parsed
 

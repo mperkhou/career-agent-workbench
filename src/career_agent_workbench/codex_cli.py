@@ -850,8 +850,10 @@ def _classified_attempt_failure(
     caught: BaseException,
 ) -> tuple[None, CodexRunnerError, bool]:
     caught_type = type(caught)
-    if caught_type in {subprocess.TimeoutExpired, TimeoutError, CodexTimeoutError}:
+    if caught_type is subprocess.TimeoutExpired:
         return None, CodexTimeoutError("Codex execution timed out."), True
+    if caught_type in {TimeoutError, CodexTimeoutError}:
+        return None, CodexTimeoutError("Codex execution timed out."), False
     if caught_type in {
         asyncio.CancelledError,
         KeyboardInterrupt,

@@ -156,10 +156,45 @@ def test_manual_and_highlight_config_only_defaults_are_model_free(
     "name",
     ["application_resume_manual_pass.py", "application_resume_highlight_drafts.py"],
 )
-def test_codex_workflow_parser_defaults_are_mature_aligned(name: str) -> None:
+def test_codex_workflow_parser_defaults_defer_to_runtime_settings(name: str) -> None:
     args = _load_script(name).build_arg_parser().parse_args([])
-    assert args.timeout_seconds == 900.0
-    assert args.retry_count == 1
+    assert args.timeout_seconds is None
+    assert args.retry_count is None
+
+
+@pytest.mark.parametrize(
+    ("name", "stage"),
+    (
+        ("application_resume_manual_pass.py", "manual"),
+        ("application_resume_highlight_drafts.py", "highlight"),
+    ),
+)
+def test_codex_config_only_reports_runtime_tuning_source(
+    name: str,
+    stage: str,
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_script(name)
+    config = RuntimeConfig(
+        paths=WorkspacePaths(),
+        settings=Settings(codex_timeout_seconds=777, codex_retries=2),
+        env_file=None,
+        setting_sources=(
+            ("codex_retries", "private_dotenv"),
+            ("codex_timeout_seconds", "process"),
+        ),
+    )
+    monkeypatch.setattr(module, "load_command_config", lambda *_a, **_k: config)
+
+    assert module.main(["--config-only"]) == 0
+    captured = capsys.readouterr()
+    event = json.loads(captured.err)
+    assert event["stage"] == stage
+    assert event["timeout_seconds"] == 777
+    assert event["retry_count"] == 2
+    assert event["sources"]["timeout"] == "process"
+    assert event["sources"]["retry_count"] == "private_dotenv"
 
 
 def test_render_script_resolves_configured_defaults_after_parsing(

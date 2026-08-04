@@ -183,6 +183,10 @@ class _FakeExecutor:
             raise subprocess.TimeoutExpired(command, timeout)
         if action == "timeout":
             raise subprocess.TimeoutExpired(command, timeout)
+        if action == "generic_timeout":
+            raise TimeoutError("synthetic private timeout detail")
+        if action == "codex_timeout":
+            raise CodexTimeoutError("synthetic private timeout detail")
         if action.startswith("timeout_replace_"):
             target = action.removeprefix("timeout_replace_")
             if target == "executable":
@@ -1333,6 +1337,23 @@ def test_timeout_retries_then_succeeds_and_cleans_each_child(
     assert result.model_metadata["attempt"] == 2
     assert len(executor.calls) == 2
     assert list(config.tmp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("action", ("generic_timeout", "codex_timeout"))
+def test_only_subprocess_timeout_consumes_codex_retry(
+    tmp_path: Path,
+    action: str,
+) -> None:
+    executor = _FakeExecutor([action, "success"])
+    runner, config = _process_runner(tmp_path, executor)
+
+    with pytest.raises(CodexTimeoutError) as captured:
+        runner.run(_request(attempts=2))
+
+    assert len(executor.calls) == 1
+    assert list(config.tmp_dir.iterdir()) == []
+    assert str(captured.value) == "Codex execution timed out."
+    assert "synthetic private" not in str(captured.value)
 
 
 @pytest.mark.parametrize(

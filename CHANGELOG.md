@@ -29,11 +29,13 @@
   presence-aware Make/CLI/private-dotenv precedence, model-free effective-
   configuration checks, row isolation, and bounded content-free Flask action
   logs before any further synthetic provider run.
-- Added an offline P03D repair gate that prospectively supersedes v1/v2's
-  timeout-only retry behavior with narrowly typed transient provider retries,
-  one exact workflow-owned attempt budget, additive legacy-compatible failure
-  subtypes, and bounded correlated durable diagnostics. Manual/highlighting
-  behavior is unchanged, and another live traversal remains separately gated.
+- Narrowed the offline P03D repair gate to the demonstrated API-backed v1/v2
+  defect: one exact workflow-owned retry budget, a closed transient allowlist,
+  and additive legacy-compatible failure subtypes through the existing P03C
+  diagnostic stream and Flask action log. Ollama remains timeout-only,
+  manual/highlighting behavior is unchanged, generalized durable diagnostic
+  ownership/leases/recovery/correlation/viewing are deferred to a future
+  feature release, and another live traversal remains separately gated.
 
 ## [2.0.0] - In progress
 

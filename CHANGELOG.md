@@ -8,6 +8,10 @@
   resume/MRO with a realistic full-depth public demo, rebuild README examples
   from that approved source, and reassess diagrams and Flask screenshots behind
   explicit privacy and user-review gates.
+- Expanded the documentation workflow's demo target to require an original,
+  full-size fictional job posting whose depth and organization are informed by
+  content-free patterns from retained descriptions without copying private
+  posting content or mutating private state.
 
 ## [2.0.0] - In progress
 

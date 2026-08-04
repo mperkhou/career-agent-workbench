@@ -43,11 +43,13 @@
   highlighting sequence, each retry setting remains two retries/three total
   attempts, four external snapshot sets remain retained, and the workflow
   stops at the first failed stage without an operator rerun.
-- Added an offline functional repair gate for the revision-10 first-draft
-  state-write blocker: materialize tuple-bearing `AtsDiagnostics` dataclass
-  output into JSON-safe lists before the strict application-state write, prove
-  the production first-draft path commits through a real disposable state
-  store, and keep any further live traversal separately gated.
+- Fixed the revision-10 first-draft state-write blocker by materializing
+  tuple-bearing `AtsDiagnostics` dataclass output into JSON-safe lists before
+  the strict application-state write. A production-shaped offline regression
+  now proves the v1 call site commits through a real disposable state store
+  without relaxing validation, losing diagnostic values or order, changing
+  automatic selection, or weakening expected-revision enforcement; any further
+  live traversal remains separately gated.
 
 ## [2.0.0] - In progress
 

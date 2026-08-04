@@ -4,8 +4,10 @@ import argparse
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
@@ -13,6 +15,20 @@ import pytest
 import yaml
 
 import career_agent_workbench.artifact_exports as artifact_exports
+from career_agent_workbench.application_state import (
+    ApplicationMetadata,
+    ApplicationStateConflictError,
+    ApplicationStateStore,
+    ApplicationStateValidationError,
+    AtsFields,
+    ResumeVariantWrite,
+)
+from career_agent_workbench.ats import (
+    AtsComponentScores,
+    AtsDiagnostics,
+    AtsProxyScore,
+    AtsWeightedTerm,
+)
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
 from career_agent_workbench.errors import (
     LlmTimeoutError,
@@ -744,6 +760,215 @@ async def test_first_draft_generation_sanitizes_each_stage_failure(
         assert request_counts["jod"] == 1
     if boundary == "experience_rewrite_request":
         assert request_counts["experience"] == 1
+
+
+@pytest.mark.asyncio
+async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_script("application_resume_generate_drafts.py")
+    job_id = "fictional-ats-state"
+    description = "Responsibilities: Build reliable fictional systems."
+    database = tmp_path / "state" / "applications.sqlite3"
+    paths = WorkspacePaths(
+        database=database,
+        output_dir=tmp_path / "artifacts",
+        master_resume=tmp_path / "profile" / "MASTER-RESUME.yml",
+    )
+    store = ApplicationStateStore(paths)
+    store.initialize()
+    store.seed_application(
+        ApplicationMetadata(
+            job_id=job_id,
+            company="Fictional Systems Cooperative",
+            job_title="Synthetic Reliability Engineer",
+            job_url=f"https://jobs.example.test/openings/{job_id}",
+            source="synthetic_test",
+        ),
+        source_text=description,
+        prompt_text=description,
+    )
+    before = store.get_workflow_snapshot(job_id)
+    diagnostics = AtsDiagnostics(
+        score=AtsProxyScore(
+            overall_score=83,
+            parsing_score=97,
+            keyword_match_score=79,
+            semantic_match_score=81,
+            formatting_risk="low",
+            missing_high_value_terms=("bounded gap", "secondary gap"),
+        ),
+        component_scores=AtsComponentScores(
+            overall_score=83,
+            parsing_score=97,
+            keyword_match_score=79,
+            semantic_match_score=81,
+            formatting_score=94,
+            formatting_risk="low",
+        ),
+        matched_terms=(
+            AtsWeightedTerm(term="python", weight=2.5),
+            AtsWeightedTerm(term="automation", weight=1.5),
+        ),
+        unmatched_weighted_terms=(AtsWeightedTerm(term="bounded gap", weight=3.0),),
+        repeated_phrase_terms=(AtsWeightedTerm(term="reliability", weight=1.25),),
+        likely_noisy_phrase_matches=(AtsWeightedTerm(term="systems", weight=0.5),),
+    )
+    raw_diagnostics = asdict(diagnostics)
+    assert type(raw_diagnostics["matched_terms"]) is tuple
+    raw_write = ResumeVariantWrite(
+        variant_key="v1",
+        variant_label="Governed first draft",
+        source="governed_first_draft",
+        application_resume_yaml="basics:\n  name: Synthetic Candidate\n",
+        ats=AtsFields(score=83),
+        ats_diagnostics=raw_diagnostics,
+    )
+    with pytest.raises(ApplicationStateValidationError):
+        store.upsert_resume_variant_if_revision(
+            job_id,
+            raw_write,
+            expected_revision=before.revision,
+        )
+    assert store.get_workflow_snapshot(job_id).variants == ()
+
+    resume = {
+        "basics": {"name": "Synthetic Candidate"},
+        "professional_experience": {"jobs": []},
+    }
+
+    class FakeCoreClient:
+        model = "synthetic-core-model"
+
+        async def generate_json(self, _prompt):
+            return {}
+
+    class FakeJodClient:
+        async def generate_json(self, _prompt):
+            return {}
+
+        async def generate_text(self, _prompt):
+            pytest.fail("empty experience inventory requested a provider response")
+
+    monkeypatch.setattr(
+        module,
+        "initialize_application_resume_object",
+        lambda *_a, **_k: resume,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_core_skills_jod_match_prompt",
+        lambda **_k: "synthetic core prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "apply_core_skill_jod_matches",
+        lambda **_k: resume,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_jod_requirements_target_prompt",
+        lambda **_k: "synthetic JOD prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "create_job_opening_description_object",
+        lambda **_k: {"requirements_targets": []},
+    )
+    monkeypatch.setattr(
+        module,
+        "attach_job_opening_description_object",
+        lambda **_k: resume,
+    )
+    monkeypatch.setattr(
+        module,
+        "experience_jobs_for_jod_bullet_rewrite",
+        lambda _resume: (),
+    )
+    monkeypatch.setattr(
+        module,
+        "render_resume_html_from_mapping",
+        lambda **_k: "<html><body>Synthetic resume</body></html>",
+    )
+    monkeypatch.setattr(
+        module,
+        "render_resume_pdf_from_html",
+        lambda _html: b"synthetic-pdf",
+    )
+    monkeypatch.setattr(
+        module,
+        "calculate_ats_diagnostics",
+        lambda **_k: diagnostics,
+    )
+
+    assert (
+        await module._generate_one(
+            store=store,
+            paths=paths,
+            candidate=module._EligibleCandidate(
+                job_id=job_id,
+                snapshot=store.get_workflow_snapshot(job_id),
+                description=description,
+            ),
+            core_client=FakeCoreClient(),
+            jod_client=FakeJodClient(),
+            jod_model="synthetic-jod-model",
+            template=None,
+            artifact_dir=None,
+            max_jod_chars=1_000,
+            retries=0,
+        )
+        is True
+    )
+
+    after = store.get_workflow_snapshot(job_id)
+    assert tuple(variant.variant_key for variant in after.variants) == ("v1",)
+    assert after.application.selected_resume_variant == "v1"
+    assert after.application.resume_variant_selection_mode == "auto"
+    expected_diagnostics = json.loads(json.dumps(raw_diagnostics, allow_nan=False))
+    with sqlite3.connect(database) as connection:
+        stored_json = connection.execute(
+            """
+            SELECT ats_diagnostics_json
+            FROM application_resume_variants
+            WHERE job_id = ? AND variant_key = 'v1'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    persisted_diagnostics = json.loads(stored_json)
+    assert persisted_diagnostics == expected_diagnostics
+    assert type(persisted_diagnostics["score"]["missing_high_value_terms"]) is list
+    assert type(persisted_diagnostics["matched_terms"]) is list
+    assert type(persisted_diagnostics["unmatched_weighted_terms"]) is list
+    assert type(persisted_diagnostics["repeated_phrase_terms"]) is list
+    assert type(persisted_diagnostics["likely_noisy_phrase_matches"]) is list
+    assert [item["term"] for item in persisted_diagnostics["matched_terms"]] == [
+        "python",
+        "automation",
+    ]
+    assert persisted_diagnostics["component_scores"] == {
+        "formatting_risk": "low",
+        "formatting_score": 94,
+        "keyword_match_score": 79,
+        "overall_score": 83,
+        "parsing_score": 97,
+        "semantic_match_score": 81,
+    }
+
+    with pytest.raises(ApplicationStateConflictError):
+        store.upsert_resume_variant_if_revision(
+            job_id,
+            ResumeVariantWrite(
+                variant_key="v1",
+                variant_label="Governed first draft",
+                source="governed_first_draft",
+                application_resume_yaml="basics:\n  name: Stale Synthetic Candidate\n",
+                ats=AtsFields(score=83),
+                ats_diagnostics=expected_diagnostics,
+            ),
+            expected_revision=before.revision,
+        )
 
 
 @pytest.mark.asyncio

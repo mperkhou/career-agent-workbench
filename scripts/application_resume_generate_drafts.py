@@ -175,6 +175,12 @@ def _run_stage(stage: _FailureStage, operation: Callable[[], T]) -> T:
         raise _stage_failure(stage, error) from None
 
 
+def _materialize_ats_diagnostics(diagnostics: Any) -> dict[str, Any]:
+    """Convert dataclass tuple collections to the state store's JSON shape."""
+
+    return json.loads(json.dumps(asdict(diagnostics), allow_nan=False))
+
+
 async def _run_async_stage(
     stage: _FailureStage,
     operation: Callable[[], Awaitable[T]],
@@ -433,7 +439,7 @@ async def _generate_one(
                     formatting_risk=score.formatting_risk,
                     missing_terms=", ".join(score.missing_high_value_terms),
                 ),
-                ats_diagnostics=asdict(diagnostics),
+                ats_diagnostics=_materialize_ats_diagnostics(diagnostics),
                 model_metadata={
                     "workflow": "first_draft",
                     "core_model": getattr(core_client, "model", "configured"),

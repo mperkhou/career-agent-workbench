@@ -87,6 +87,13 @@
   workspace activity, revision 15 authorizes one corrected model-free
   preflight in the user's designated original implementor task. This one-time
   task-reuse exception still stops at G03V and grants no live-run authority.
+- Recorded that revision 15 then passed its binding and retained-workspace
+  checks but stopped before evidence creation or any Make target because its
+  generated local orchestration wrapper failed to compile. Revision 16 permits
+  one model-free preflight run directly by the supervisor as four separate
+  config-only Make commands against the same retained synthetic workspace,
+  with no delegation, generated wrapper, or live provider/model/Codex
+  authority.
 
 ## [2.0.0] - In progress
 

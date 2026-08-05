@@ -70,8 +70,16 @@
   `retry_count + 1` boundaries, additive legacy-compatible content-free
   diagnostics, the ATS persistence regression, and unchanged manual/
   highlighting behavior while leaving the generalized durable-diagnostics
-  platform deferred to 2.2.0. Another synthetic traversal remains a distinct
-  committed amendment and explicit approval boundary after G03U.
+  platform deferred to 2.2.0. P03U itself made no live call and granted no
+  traversal authority.
+- After G03U PASS, scoped a distinct P03V/G03V recorded synthetic traversal
+  with two additional authority boundaries: committing the amendment starts
+  nothing; a later approval permits one model-free preflight in a fresh
+  implementor task; and only a reviewed preflight PASS plus another explicit
+  approval permits one conditional v1 → v2 → regular-manual →
+  highlighting sequence. The future run remains stop-first-failure, retains
+  all four untracked snapshot/PDF sets and a complete source-time sanitized
+  log, and cannot enter P04 or claim README evidence unless all stages pass.
 
 ## [2.0.0] - In progress
 

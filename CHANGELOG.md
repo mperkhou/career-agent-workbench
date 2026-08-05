@@ -56,6 +56,22 @@
   invocation. The sequence uses two retries/three total attempts, stops at the
   first failure without an operator rerun, preserves four untracked external
   artifact/PDF snapshot sets and a sanitized log, and remains gated before P04.
+- Recorded the consumed P03T outcome without rerunning it: preflight passed;
+  core, JOD, and three experience operations succeeded; then the fourth
+  experience operation exceeded the intended 300-second wall-clock bound and
+  ended after 439.688 seconds as a nonretryable HTTP-200 malformed envelope on
+  attempt one of three. No v1 or later stage was stored, the deterministic
+  baseline and four empty snapshot directories remain unchanged, and its
+  sanitized log passed leakage review.
+- Added offline-only P03U/G03U to enforce the configured timeout as a genuine
+  per-attempt v1/v2 wall-clock deadline and classify validated HTTP-200 embedded
+  provider errors plus unusable missing/null/empty completions through the
+  existing single workflow retry budget. The amendment preserves exact
+  `retry_count + 1` boundaries, additive legacy-compatible content-free
+  diagnostics, the ATS persistence regression, and unchanged manual/
+  highlighting behavior while leaving the generalized durable-diagnostics
+  platform deferred to 2.2.0. Another synthetic traversal remains a distinct
+  committed amendment and explicit approval boundary after G03U.
 
 ## [2.0.0] - In progress
 

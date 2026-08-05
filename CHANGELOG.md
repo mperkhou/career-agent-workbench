@@ -77,9 +77,9 @@
   nothing; a later approval permits one model-free preflight in a fresh
   implementor task; and only a reviewed preflight PASS plus another explicit
   approval permits one conditional v1 → v2 → regular-manual →
-  highlighting sequence. The future run remains stop-first-failure, retains
-  all four untracked snapshot/PDF sets and a complete source-time sanitized
-  log, and cannot enter P04 or claim README evidence unless all stages pass.
+  highlighting sequence. The run was required to stop at its first failure,
+  retain all four untracked snapshot/PDF sets and a complete source-time
+  sanitized log, and claim README evidence only if every stage passed.
 - Recorded the revision-14 preflight false negative: the fresh task stopped
   before configuration or workspace access because its task-binding validator
   incorrectly required a standalone scalar match for an ID stored inside the
@@ -95,11 +95,11 @@
   with no delegation, generated wrapper, or live provider/model/Codex
   authority.
 - Recorded the revision-16 direct preflight PASS and the user's explicit live-
-  subphase approval. Revision 17 authorizes exactly one supervisor-owned
+  subphase approval. Revision 17 limited execution to one supervisor-owned
   `demo-platform-001` force-v1 followed conditionally by v2, regular manual,
-  and highlighting; it must stop at the first failed or ambiguous stage,
-  retain the source-time sanitized log and all successful snapshot/PDF sets,
-  and permits no wrapper or operator rerun.
+  and highlighting, with a stop-first-failure boundary, source-time sanitized
+  logging, retained successful snapshot/PDF sets, and no wrapper or operator
+  rerun.
 - Corrected v2 to use the API client's tolerant JSON-generation boundary, so
   bare, Markdown-fenced, and supported wrapped JSON are canonicalized before
   strict patch parsing. Syntactically malformed generated JSON now consumes the
@@ -108,6 +108,13 @@
   public-synthetic v1 then completed v2, regular Sol/high manual review, and
   Luna/high highlighting with sanitized logs and rendered artifacts outside
   Git.
+- Recorded the completed public-synthetic result without publishing its raw
+  artifacts: retained v1 was not regenerated; v2, manual, and highlighting each
+  completed on attempt one; v1, v2, and manual retained an ATS diagnostic score
+  of 92; automatic selection ended on `manual`; and persisted prompt/response
+  fields remained absent. Focused coverage passed 557 tests and the complete
+  suite passed 1,247, with lint, format, diff, public-safety, and PDF visual
+  checks also passing.
 
 ## [2.0.0] - In progress
 

@@ -429,7 +429,7 @@ Highlighting is a separate exact-target operation:
 ```bash
 make highlight-draft-resumes \
   JOB_IDS="demo-platform-001" \
-  HIGHLIGHT_RESUME_VARIANT=v2 \
+  HIGHLIGHT_RESUME_VARIANT=manual \
   HIGHLIGHT_MAX_STRONG_SPANS_PER_BULLET=2
 ```
 
@@ -454,6 +454,26 @@ sanitized before deterministic PDF rendering; unsupported markup and unsafe
 links are not carried into the artifact. The demo CLO says only that Tessa is
 interested in the Rivermark role and that the public resume supports the named
 overlap. It explicitly requires human review.
+
+### Recorded public-synthetic refinement
+
+The 2.1.0 documentation pass also exercised the fictional
+`demo-platform-001` row through the configured workflows in a retained
+public-synthetic workspace. This is validation evidence, not a tracked fixture:
+the complete sanitized log and generated YAML, HTML, and PDF artifacts remain
+outside Git.
+
+| Stage | Configuration | Persisted result |
+| --- | --- | --- |
+| v1 | Existing retained public-synthetic variant; not regenerated | ATS diagnostic score 92 |
+| v2 | `z-ai/glm-5.2`; 600-second deadline; two retries | Attempt 1; ATS diagnostic score 92 |
+| Manual | `regular` profile: `gpt-5.6-sol`, high reasoning; 900-second deadline; two retries | Attempt 1; ATS diagnostic score 92 |
+| Highlight | `gpt-5.6-luna`, high reasoning; 900-second deadline; two retries | Attempt 1; updated `manual` in place |
+
+The final selected variant is `manual` under automatic selection. Persisted
+prompt and response fields are absent. The unchanged score across variants is
+reported as observed; it is not evidence that the variants are identical or
+that an employer would score them the same way.
 
 ## ATS diagnostics and evidence lineage
 
@@ -536,7 +556,8 @@ The UI does not submit an external application or contact an employer.
 
 The tracked PNGs below are existing synthetic documentation illustrations, not
 screenshots produced by `make demo` and not evidence of private operator state.
-They are retained unchanged for the separate 2.1.0 visual-review phase.
+They remain intentionally generic and are not presented as captures of the
+recorded public-synthetic refinement.
 
 ### Add jobs and review tracker state
 
@@ -702,8 +723,8 @@ v2 remain timeout-only. Manual pass and highlighting remain Codex-subprocess-
 timeout-only. Codex nonzero exits and missing or invalid output do not retry.
 Valid JSON that fails schema, application, policy, or evidence validation
 remains nonretryable; rendering, ATS, state, artifact, and configuration
-failures likewise fail that row without consuming another workflow attempt. Batch
-commands keep later rows isolated and preserve earlier successful writes.
+failures likewise fail that row without consuming another workflow attempt.
+Batch commands keep later rows isolated and preserve earlier successful writes.
 
 The configured v1/v2 timeout is a wall-clock deadline for each logical model
 attempt, not only an HTTP transport-inactivity timeout. Each retry receives a

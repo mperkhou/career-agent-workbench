@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.1.0] - In progress
+## [2.1.0] - 2026-08-05
 
 ### Changed
 

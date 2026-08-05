@@ -1400,6 +1400,16 @@ def test_response_summary_rejects_contradictory_closed_metadata() -> None:
             choices_count=None,
             content_state=ModelResponseContentState.UNAVAILABLE,
         )
+    with pytest.raises(ValueError, match="response metadata"):
+        ModelResponseSummary(
+            http_status=200,
+            error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+            error_code=429,
+            error_type=ModelResponseErrorType.SERVER,
+            finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+            choices_count=None,
+            content_state=ModelResponseContentState.UNAVAILABLE,
+        )
     permanent = ModelResponseSummary(
         http_status=200,
         error_presence=ModelResponseErrorPresence.TOP_LEVEL,
@@ -1413,6 +1423,39 @@ def test_response_summary_rejects_contradictory_closed_metadata() -> None:
         RetryableModelError(
             subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
             response_summary=permanent,
+        )
+
+
+def test_typed_embedded_error_rechecks_pair_and_preserves_type_only_shape() -> None:
+    type_only = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=None,
+        error_type=ModelResponseErrorType.SERVER,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    accepted = RetryableModelError(
+        subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        response_summary=type_only,
+    )
+    assert accepted.response_summary is type_only
+
+    mismatched = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=500,
+        error_type=ModelResponseErrorType.SERVER,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    object.__setattr__(mismatched, "error_code", 429)
+    with pytest.raises(ValueError, match="failure metadata"):
+        RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            response_summary=mismatched,
         )
 
 

@@ -198,7 +198,7 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
         http_status=200,
         error_presence=ModelResponseErrorPresence.CHOICE,
         error_code=503,
-        error_type=ModelResponseErrorType.PROVIDER_UNAVAILABLE,
+        error_type=ModelResponseErrorType.OVERLOADED,
         finish_reason=ModelResponseFinishReason.ERROR,
         choices_count=1,
         content_state=ModelResponseContentState.PRESENT,
@@ -306,6 +306,18 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
         (
             ModelFailureSubtype.PERMANENT_HTTP,
             ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.UNAVAILABLE,
+                error_code=None,
+                error_type=ModelResponseErrorType.UNAVAILABLE,
+                finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+                choices_count=None,
+                content_state=ModelResponseContentState.UNAVAILABLE,
+            ),
+        ),
+        (
+            ModelFailureSubtype.PERMANENT_HTTP,
+            ModelResponseSummary(
                 http_status=429,
                 error_presence=ModelResponseErrorPresence.UNAVAILABLE,
                 error_code=None,
@@ -394,6 +406,108 @@ def test_diagnostic_rejects_response_summary_that_contradicts_subtype(
             timestamp="2042-04-10T10:00:04+00:00",
         )
         is None
+    )
+
+
+def test_diagnostic_rechecks_transient_pair_and_preserves_type_only_shape() -> None:
+    type_only = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=None,
+        error_type=ModelResponseErrorType.SERVER,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    accepted = attempt_event(
+        event=DiagnosticEvent.RETRY_DECISION,
+        stage=WorkflowStage.V1_CORE,
+        attempt=1,
+        total_attempts=2,
+        retry=True,
+        category=FailureCategory.MODEL,
+        failure_subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        response_summary=type_only,
+    )
+    captured = captured_diagnostic_event(
+        accepted,
+        timestamp="2042-04-10T10:00:05+00:00",
+    )
+    assert captured is not None
+    assert captured["response_summary"] == type_only.as_dict()
+
+    mismatched = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=500,
+        error_type=ModelResponseErrorType.SERVER,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    object.__setattr__(mismatched, "error_code", 429)
+    with pytest.raises(ValueError, match="diagnostic event"):
+        attempt_event(
+            event=DiagnosticEvent.FAILURE,
+            stage=WorkflowStage.V1_CORE,
+            attempt=1,
+            total_attempts=2,
+            category=FailureCategory.MODEL,
+            failure_subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            response_summary=mismatched,
+        )
+    assert (
+        captured_diagnostic_event(
+            {
+                "event": "failure",
+                "stage": "v1_core",
+                "attempt": 1,
+                "total_attempts": 2,
+                "category": "model",
+                "failure_subtype": "embedded_transient",
+                "response_summary": mismatched.as_dict(),
+            },
+            timestamp="2042-04-10T10:00:06+00:00",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_subtype", "status"),
+    [
+        (ModelFailureSubtype.TRANSIENT_HTTP, 429),
+        (ModelFailureSubtype.PERMANENT_HTTP, 400),
+    ],
+)
+def test_diagnostic_accepts_valid_actual_http_failure_summary(
+    failure_subtype: ModelFailureSubtype,
+    status: int,
+) -> None:
+    summary = ModelResponseSummary(
+        http_status=status,
+        error_presence=ModelResponseErrorPresence.UNAVAILABLE,
+        error_code=None,
+        error_type=ModelResponseErrorType.UNAVAILABLE,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    event = attempt_event(
+        event=DiagnosticEvent.FAILURE,
+        stage=WorkflowStage.V1_CORE,
+        attempt=1,
+        total_attempts=2,
+        category=FailureCategory.MODEL,
+        failure_subtype=failure_subtype,
+        response_summary=summary,
+    )
+    assert (
+        captured_diagnostic_event(
+            event,
+            timestamp="2042-04-10T10:00:07+00:00",
+        )
+        is not None
     )
 
 

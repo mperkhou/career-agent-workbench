@@ -221,7 +221,8 @@ class ModelResponseSummary:
         if (
             self.error_type in TRANSIENT_MODEL_RESPONSE_ERROR_TYPES
             and self.error_code is not None
-            and self.error_code not in TRANSIENT_MODEL_HTTP_STATUSES
+            and (self.error_type, self.error_code)
+            not in TRANSIENT_MODEL_RESPONSE_CODE_PAIRS
         ):
             raise ValueError("Model response metadata is invalid.")
         if (
@@ -384,6 +385,16 @@ class TypedModelError(LlmError):
                 subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT
                 and response_summary.error_type
                 not in TRANSIENT_MODEL_RESPONSE_ERROR_TYPES
+            ):
+                raise ValueError("Model failure metadata is invalid.")
+            if (
+                subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT
+                and response_summary.error_code is not None
+                and (
+                    response_summary.error_type,
+                    response_summary.error_code,
+                )
+                not in TRANSIENT_MODEL_RESPONSE_CODE_PAIRS
             ):
                 raise ValueError("Model failure metadata is invalid.")
             if (

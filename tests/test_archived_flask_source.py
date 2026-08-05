@@ -504,7 +504,7 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
             http_status=200,
             error_presence=ModelResponseErrorPresence.CHOICE,
             error_code=503,
-            error_type=ModelResponseErrorType.PROVIDER_UNAVAILABLE,
+            error_type=ModelResponseErrorType.OVERLOADED,
             finish_reason=ModelResponseFinishReason.ERROR,
             choices_count=1,
             content_state=ModelResponseContentState.PRESENT,
@@ -586,7 +586,7 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
         if event.get("failure_subtype") == "embedded_transient"
     )
     assert stored_retry["category"] == "model"
-    assert stored_retry["response_summary"]["error_type"] == "provider_unavailable"
+    assert stored_retry["response_summary"]["error_type"] == "overloaded"
     full_payload = app.test_client().get("/actions/status?detail=full").get_json()
     full_rendered = json.dumps(full_payload, sort_keys=True)
     assert "embedded transient" in full_rendered

@@ -18,6 +18,7 @@ from career_agent_workbench.errors import (
     ModelResponseFinishReason,
     ModelResponseSummary,
     TRANSIENT_MODEL_HTTP_STATUSES,
+    TRANSIENT_MODEL_RESPONSE_CODE_PAIRS,
     TRANSIENT_MODEL_RESPONSE_ERROR_TYPES,
 )
 
@@ -335,7 +336,11 @@ def _response_summary_matches_subtype(
         ModelFailureSubtype.TRANSIENT_HTTP,
         ModelFailureSubtype.PERMANENT_HTTP,
     }:
-        if summary.http_status is None or not unavailable_envelope:
+        if (
+            summary.http_status is None
+            or not 300 <= summary.http_status <= 599
+            or not unavailable_envelope
+        ):
             return False
         transient = summary.http_status in TRANSIENT_MODEL_HTTP_STATUSES
         return transient == (subtype is ModelFailureSubtype.TRANSIENT_HTTP)
@@ -362,7 +367,14 @@ def _response_summary_matches_subtype(
         ):
             return False
         if subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT:
-            return summary.error_type in TRANSIENT_MODEL_RESPONSE_ERROR_TYPES
+            return bool(
+                summary.error_type in TRANSIENT_MODEL_RESPONSE_ERROR_TYPES
+                and (
+                    summary.error_code is None
+                    or (summary.error_type, summary.error_code)
+                    in TRANSIENT_MODEL_RESPONSE_CODE_PAIRS
+                )
+            )
         return summary.error_type is ModelResponseErrorType.PERMANENT_REQUEST
 
     if subtype is ModelFailureSubtype.EMPTY_COMPLETION:

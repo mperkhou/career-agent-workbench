@@ -24,8 +24,6 @@ from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest, Mod
 from career_agent_workbench.config import Settings, WorkspaceMember
 from career_agent_workbench.errors import (
     LlmTimeoutError,
-    ModelFailureSubtype,
-    NonRetryableModelError,
     OllamaTimeoutError,
 )
 from career_agent_workbench.llm import build_llm_client
@@ -74,9 +72,13 @@ class _ConfiguredLlmRunner:
                 async def invoke() -> str:
                     nonlocal attempt_count
                     attempt_count += 1
-                    response = await client.generate_text(request.prompt)
-                    _validate_generation_json_syntax(response)
-                    return response
+                    response = await client.generate_json(request.prompt)
+                    return json.dumps(
+                        response,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
 
                 response = await run_model_operation(
                     invoke,
@@ -105,19 +107,6 @@ class _ConfiguredLlmRunner:
                 "version": 1,
             },
         )
-
-
-def _validate_generation_json_syntax(response: str) -> None:
-    try:
-        json.loads(response, parse_constant=_reject_json_constant)
-    except (ValueError, RecursionError):
-        raise NonRetryableModelError(
-            subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
-        ) from None
-
-
-def _reject_json_constant(_value: str) -> None:
-    raise ValueError("Non-standard JSON constants are not accepted.")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

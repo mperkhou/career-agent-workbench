@@ -1105,9 +1105,9 @@ def _build_command(
 ) -> tuple[str, ...]:
     parts = [
         os.fspath(process.executable),
-        *process.argv,
         "--ask-for-approval",
         "never",
+        *process.argv,
         "--sandbox",
         "read-only",
         "--cd",

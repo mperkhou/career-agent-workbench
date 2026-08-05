@@ -872,16 +872,14 @@ def _parse_json_object(text: str) -> Mapping[str, Any]:
         return value
     if isinstance(value, list):
         return {"queries": value}
-    raise NonRetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
+    raise NonRetryableModelError(subtype=ModelFailureSubtype.UNEXPECTED_MODEL)
 
 
 def _parse_json_value(text: str) -> object:
     stripped = text.strip()
     loaded, value, recursive = _load_json(stripped)
     if recursive:
-        raise NonRetryableModelError(
-            subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
-        )
+        raise RetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
     if loaded:
         return value
 
@@ -892,7 +890,7 @@ def _parse_json_value(text: str) -> object:
     ):
         loaded, value, recursive = _load_json(match.group(1).strip())
         if recursive:
-            raise NonRetryableModelError(
+            raise RetryableModelError(
                 subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
             )
         if loaded:
@@ -904,12 +902,12 @@ def _parse_json_value(text: str) -> object:
             continue
         loaded, value, recursive = _raw_decode_json(decoder, stripped[index:])
         if recursive:
-            raise NonRetryableModelError(
+            raise RetryableModelError(
                 subtype=ModelFailureSubtype.INVALID_GENERATION_JSON
             )
         if loaded and isinstance(value, (Mapping, list)):
             return value
-    raise NonRetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
+    raise RetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON)
 
 
 def _strip_thinking(text: str) -> str:

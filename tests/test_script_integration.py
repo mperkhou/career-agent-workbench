@@ -1387,6 +1387,51 @@ def test_rendered_resume_export_writes_only_yaml_html_pdf_under_workspace(
     }
 
 
+def test_rendered_resume_export_materializes_governed_immutable_containers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "private-workspace"
+    workspace.mkdir()
+    paths = WorkspacePaths(root=workspace)
+    resume = MappingProxyType(
+        {
+            "name": "Fictional Candidate",
+            "skills": (MappingProxyType({"category": "Synthetic Systems"}),),
+        }
+    )
+    captured: dict[str, object] = {}
+
+    def render(*, resume, **_kwargs):
+        captured["resume"] = resume
+        return "<html>rendered synthetic</html>"
+
+    monkeypatch.setattr(artifact_exports, "render_resume_html_from_mapping", render)
+    monkeypatch.setattr(
+        artifact_exports,
+        "render_resume_pdf_from_html",
+        lambda _html: b"synthetic-pdf",
+    )
+
+    artifact_exports.export_rendered_resume(
+        paths=paths,
+        output_dir=Path("rendered"),
+        job_id="fictional-job",
+        resume=resume,
+    )
+
+    assert captured["resume"] == {
+        "name": "Fictional Candidate",
+        "skills": [{"category": "Synthetic Systems"}],
+    }
+    assert (
+        yaml.safe_load(
+            (workspace / "rendered" / "fictional-job.yml").read_text(encoding="utf-8")
+        )
+        == captured["resume"]
+    )
+
+
 def test_private_output_resolution_rejects_symlink_components(tmp_path: Path) -> None:
     workspace = tmp_path / "private-workspace"
     outside = tmp_path / "outside"

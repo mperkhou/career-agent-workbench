@@ -76,6 +76,7 @@ RETRYABLE_MODEL_FAILURE_SUBTYPES = frozenset(
         ModelFailureSubtype.TRANSPORT_CONNECT,
         ModelFailureSubtype.EMPTY_COMPLETION,
         ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        ModelFailureSubtype.INVALID_GENERATION_JSON,
     }
 )
 NON_RETRYABLE_MODEL_FAILURE_SUBTYPES = frozenset(
@@ -83,7 +84,6 @@ NON_RETRYABLE_MODEL_FAILURE_SUBTYPES = frozenset(
         ModelFailureSubtype.PERMANENT_HTTP,
         ModelFailureSubtype.EMBEDDED_PERMANENT,
         ModelFailureSubtype.MALFORMED_ENVELOPE,
-        ModelFailureSubtype.INVALID_GENERATION_JSON,
         ModelFailureSubtype.RESPONSE_TOO_LARGE,
         ModelFailureSubtype.UNEXPECTED_MODEL,
     }

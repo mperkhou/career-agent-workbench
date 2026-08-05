@@ -100,6 +100,14 @@
   and highlighting; it must stop at the first failed or ambiguous stage,
   retain the source-time sanitized log and all successful snapshot/PDF sets,
   and permits no wrapper or operator rerun.
+- Corrected v2 to use the API client's tolerant JSON-generation boundary, so
+  bare, Markdown-fenced, and supported wrapped JSON are canonicalized before
+  strict patch parsing. Syntactically malformed generated JSON now consumes the
+  existing bounded retry budget, while valid JSON with invalid patch schema,
+  evidence, policy, or application semantics remains nonretryable. The retained
+  public-synthetic v1 then completed v2, regular Sol/high manual review, and
+  Luna/high highlighting with sanitized logs and rendered artifacts outside
+  Git.
 
 ## [2.0.0] - In progress
 

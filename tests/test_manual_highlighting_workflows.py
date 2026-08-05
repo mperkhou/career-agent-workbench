@@ -1301,14 +1301,12 @@ def test_fake_process_success_uses_exact_argv_env_and_cleans_child(
     assert type(call["timeout"]) is float
     assert call["timeout"] == 3.0
     command = call["command"]
-    assert command[:3] == (
+    assert command[:5] == (
         os.fspath(config.executable),
+        "--ask-for-approval",
+        "never",
         "exec",
         "--skip-git-repo-check",
-    )
-    assert ("--ask-for-approval", "never") == (
-        command[3],
-        command[4],
     )
     assert "--sandbox" in command and "read-only" in command
     assert "--cd" in command and os.fspath(config.working_directory) in command

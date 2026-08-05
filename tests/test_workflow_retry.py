@@ -54,6 +54,7 @@ def _retryable_error(subtype: ModelFailureSubtype) -> RetryableModelError:
         _retryable_error(ModelFailureSubtype.TRANSPORT_PROTOCOL),
         _retryable_error(ModelFailureSubtype.EMPTY_COMPLETION),
         _retryable_error(ModelFailureSubtype.EMBEDDED_TRANSIENT),
+        _retryable_error(ModelFailureSubtype.INVALID_GENERATION_JSON),
         LlmTimeoutError(),
     ],
 )
@@ -486,7 +487,6 @@ async def test_retry_delays_honor_bounded_retry_after_and_fallback_cap(
         ),
         NonRetryableModelError(subtype=ModelFailureSubtype.MALFORMED_ENVELOPE),
         NonRetryableModelError(subtype=ModelFailureSubtype.RESPONSE_TOO_LARGE),
-        NonRetryableModelError(subtype=ModelFailureSubtype.INVALID_GENERATION_JSON),
         NonRetryableModelError(subtype=ModelFailureSubtype.UNEXPECTED_MODEL),
         LlmError("synthetic legacy model failure"),
     ],

@@ -693,12 +693,16 @@ timeouts and the closed transient allowlist: HTTP 408, 409, 425, 429, 500, 502,
 completion. They also recover from validated transient provider errors embedded
 in an HTTP-200 top-level or choice envelope and from unusable missing, null, or
 empty completion shapes when no permanent signal is present. Permanent or
-contradictory embedded errors, malformed envelopes, and invalid generation JSON
-do not retry. Ollama-backed v1 and v2 remain timeout-only. Manual pass and
-highlighting remain Codex-subprocess-timeout-only. Codex nonzero exits and
-missing or invalid output do not retry. Invalid generated JSON, schema, policy
-or evidence rejection, rendering, ATS, state, artifact, and configuration
-failures fail that row without consuming another workflow attempt. Batch
+contradictory embedded errors and malformed provider envelopes do not retry.
+API-backed syntactically malformed generated JSON retries within the same
+workflow-owned budget. The v2 client accepts bare JSON and the shared
+extractor's supported Markdown-fenced or prose-wrapped JSON, then passes a
+canonical JSON string into the strict resume-patch parser. Ollama-backed v1 and
+v2 remain timeout-only. Manual pass and highlighting remain Codex-subprocess-
+timeout-only. Codex nonzero exits and missing or invalid output do not retry.
+Valid JSON that fails schema, application, policy, or evidence validation
+remains nonretryable; rendering, ATS, state, artifact, and configuration
+failures likewise fail that row without consuming another workflow attempt. Batch
 commands keep later rows isolated and preserve earlier successful writes.
 
 The configured v1/v2 timeout is a wall-clock deadline for each logical model

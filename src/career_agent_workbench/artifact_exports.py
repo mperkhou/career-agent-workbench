@@ -31,6 +31,16 @@ class ResumeExportResult:
     pdf_written: bool = True
 
 
+def _materialize_resume(value: object) -> object:
+    """Convert governed immutable containers into renderer/YAML-safe containers."""
+
+    if isinstance(value, Mapping):
+        return {key: _materialize_resume(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_materialize_resume(item) for item in value]
+    return value
+
+
 def export_rendered_resume(
     *,
     paths: WorkspacePaths,
@@ -53,11 +63,18 @@ def export_rendered_resume(
         if os.name == "posix":
             os.chmod(selected, 0o700)
         selected = resolve_private_workspace_path(paths, selected, directory=True)
-        resume_yaml = yaml.safe_dump(resume, sort_keys=False, allow_unicode=False)
+        materialized = _materialize_resume(resume)
+        if type(materialized) is not dict:
+            raise ValueError
+        resume_yaml = yaml.safe_dump(
+            materialized,
+            sort_keys=False,
+            allow_unicode=False,
+        )
         render_options = (
             {} if template_path is None else {"template_path": template_path}
         )
-        html = render_resume_html_from_mapping(resume=resume, **render_options)
+        html = render_resume_html_from_mapping(resume=materialized, **render_options)
         pdf = render_resume_pdf_from_html(html)
         yaml_output = resolve_private_workspace_path(paths, selected / f"{job_id}.yml")
         html_output = resolve_private_workspace_path(paths, selected / f"{job_id}.html")

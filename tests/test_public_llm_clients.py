@@ -1365,6 +1365,9 @@ def test_workflow_api_client_does_not_hide_non_timeout_retries(
         lambda: NonRetryableModelError(
             subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
         ),
+        lambda: NonRetryableModelError(
+            subtype=ModelFailureSubtype.INVALID_GENERATION_JSON,
+        ),
         lambda: RetryableModelError(
             subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
             retry_after_seconds=121,
@@ -1621,7 +1624,7 @@ def test_api_failure_translation_matrix_is_typed_and_content_free(
 
 
 @pytest.mark.parametrize("generation", ['{"score": NaN}', '{"score": Infinity}'])
-def test_api_generation_rejects_nonstandard_json_without_retry(
+def test_api_generation_surfaces_retryable_syntax_failure_without_internal_retry(
     generation: str,
 ) -> None:
     calls = 0
@@ -1641,9 +1644,36 @@ def test_api_generation_rejects_nonstandard_json_without_retry(
     )
 
     async def scenario() -> None:
-        with pytest.raises(NonRetryableModelError) as captured:
+        with pytest.raises(RetryableModelError) as captured:
             await client.generate_json("synthetic prompt")
         assert captured.value.subtype is ModelFailureSubtype.INVALID_GENERATION_JSON
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1
+
+
+def test_api_generation_valid_json_wrong_shape_remains_nonretryable() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _api_response('"synthetic scalar"')
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=5,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await client.generate_json("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.UNEXPECTED_MODEL
         await client.aclose()
 
     asyncio.run(scenario())

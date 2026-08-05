@@ -10,7 +10,16 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import TextIO
 
-from career_agent_workbench.errors import ModelFailureSubtype, ModelResponseSummary
+from career_agent_workbench.errors import (
+    ModelFailureSubtype,
+    ModelResponseContentState,
+    ModelResponseErrorPresence,
+    ModelResponseErrorType,
+    ModelResponseFinishReason,
+    ModelResponseSummary,
+    TRANSIENT_MODEL_HTTP_STATUSES,
+    TRANSIENT_MODEL_RESPONSE_ERROR_TYPES,
+)
 
 INVOCATION_SOURCE_ENV = "CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE"
 MAX_DIAGNOSTIC_BYTES = 4_096
@@ -187,6 +196,10 @@ def attempt_event(
             or failure_subtype is None
             or failure_subtype is ModelFailureSubtype.TIMEOUT
             or category is not FailureCategory.MODEL
+            or not _response_summary_matches_subtype(
+                failure_subtype,
+                response_summary,
+            )
         ):
             raise ValueError("Workflow diagnostic event is invalid.")
         result["response_summary"] = response_summary.as_dict()
@@ -304,6 +317,80 @@ def _safe_label(value: object) -> bool:
         and "://" not in value
         and "\\" not in value
     )
+
+
+def _response_summary_matches_subtype(
+    subtype: ModelFailureSubtype,
+    summary: ModelResponseSummary,
+) -> bool:
+    unavailable_envelope = (
+        summary.error_presence is ModelResponseErrorPresence.UNAVAILABLE
+        and summary.error_code is None
+        and summary.error_type is ModelResponseErrorType.UNAVAILABLE
+        and summary.finish_reason is ModelResponseFinishReason.UNAVAILABLE
+        and summary.choices_count is None
+        and summary.content_state is ModelResponseContentState.UNAVAILABLE
+    )
+    if subtype in {
+        ModelFailureSubtype.TRANSIENT_HTTP,
+        ModelFailureSubtype.PERMANENT_HTTP,
+    }:
+        if summary.http_status is None or not unavailable_envelope:
+            return False
+        transient = summary.http_status in TRANSIENT_MODEL_HTTP_STATUSES
+        return transient == (subtype is ModelFailureSubtype.TRANSIENT_HTTP)
+
+    if subtype in {
+        ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        ModelFailureSubtype.EMBEDDED_PERMANENT,
+    }:
+        if (
+            summary.http_status is None
+            or not 200 <= summary.http_status <= 299
+            or summary.error_presence
+            not in {
+                ModelResponseErrorPresence.TOP_LEVEL,
+                ModelResponseErrorPresence.CHOICE,
+                ModelResponseErrorPresence.BOTH,
+            }
+        ):
+            return False
+        if (
+            summary.error_presence
+            in {ModelResponseErrorPresence.CHOICE, ModelResponseErrorPresence.BOTH}
+            and summary.finish_reason is not ModelResponseFinishReason.ERROR
+        ):
+            return False
+        if subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT:
+            return summary.error_type in TRANSIENT_MODEL_RESPONSE_ERROR_TYPES
+        return summary.error_type is ModelResponseErrorType.PERMANENT_REQUEST
+
+    if subtype is ModelFailureSubtype.EMPTY_COMPLETION:
+        return bool(
+            summary.http_status is not None
+            and 200 <= summary.http_status <= 299
+            and summary.error_presence is ModelResponseErrorPresence.NONE
+            and summary.error_code is None
+            and summary.error_type is ModelResponseErrorType.MISSING
+            and summary.finish_reason is not ModelResponseFinishReason.INVALID
+            and (
+                summary.finish_reason is ModelResponseFinishReason.ERROR
+                or summary.choices_count in {None, 0}
+                or summary.content_state
+                in {
+                    ModelResponseContentState.UNAVAILABLE,
+                    ModelResponseContentState.MISSING,
+                    ModelResponseContentState.NULL,
+                    ModelResponseContentState.EMPTY,
+                }
+            )
+        )
+
+    if subtype is ModelFailureSubtype.MALFORMED_ENVELOPE:
+        return bool(
+            summary.http_status is not None and 200 <= summary.http_status <= 299
+        )
+    return False
 
 
 __all__ = [

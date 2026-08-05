@@ -108,6 +108,7 @@ class ModelResponseErrorType(StrEnum):
     OVERLOADED = "overloaded"
     UPSTREAM_TIMEOUT = "upstream_timeout"
     SERVER = "server"
+    UNMAPPED = "unmapped"
     PERMANENT_REQUEST = "permanent_request"
     MISSING = "missing"
     UNKNOWN = "unknown"
@@ -148,6 +149,21 @@ TRANSIENT_MODEL_RESPONSE_ERROR_TYPES = frozenset(
         ModelResponseErrorType.OVERLOADED,
         ModelResponseErrorType.UPSTREAM_TIMEOUT,
         ModelResponseErrorType.SERVER,
+        ModelResponseErrorType.UNMAPPED,
+    }
+)
+
+TRANSIENT_MODEL_RESPONSE_CODE_PAIRS = frozenset(
+    {
+        (ModelResponseErrorType.RATE_LIMIT, 429),
+        (ModelResponseErrorType.PROVIDER_UNAVAILABLE, 409),
+        (ModelResponseErrorType.PROVIDER_UNAVAILABLE, 425),
+        (ModelResponseErrorType.PROVIDER_UNAVAILABLE, 502),
+        (ModelResponseErrorType.OVERLOADED, 503),
+        (ModelResponseErrorType.UPSTREAM_TIMEOUT, 408),
+        (ModelResponseErrorType.UPSTREAM_TIMEOUT, 504),
+        (ModelResponseErrorType.SERVER, 500),
+        (ModelResponseErrorType.UNMAPPED, 500),
     }
 )
 
@@ -466,6 +482,7 @@ __all__ = [
     "RetryableModelError",
     "RETRYABLE_MODEL_FAILURE_SUBTYPES",
     "TRANSIENT_MODEL_HTTP_STATUSES",
+    "TRANSIENT_MODEL_RESPONSE_CODE_PAIRS",
     "TRANSIENT_MODEL_RESPONSE_ERROR_TYPES",
     "TypedModelError",
     "WorkflowError",

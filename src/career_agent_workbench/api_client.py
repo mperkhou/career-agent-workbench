@@ -28,6 +28,7 @@ from career_agent_workbench.errors import (
     NonRetryableModelError,
     RetryableModelError,
     TRANSIENT_MODEL_HTTP_STATUSES,
+    TRANSIENT_MODEL_RESPONSE_CODE_PAIRS,
     TypedModelError,
 )
 
@@ -55,6 +56,7 @@ _MISSING = object()
 _TRANSIENT_ERROR_TYPES = {
     "rate_limit": ModelResponseErrorType.RATE_LIMIT,
     "rate_limit_error": ModelResponseErrorType.RATE_LIMIT,
+    "rate_limit_exceeded": ModelResponseErrorType.RATE_LIMIT,
     "rate_limited": ModelResponseErrorType.RATE_LIMIT,
     "provider_unavailable": ModelResponseErrorType.PROVIDER_UNAVAILABLE,
     "provider_unavailable_error": ModelResponseErrorType.PROVIDER_UNAVAILABLE,
@@ -69,6 +71,8 @@ _TRANSIENT_ERROR_TYPES = {
     "gateway_timeout": ModelResponseErrorType.UPSTREAM_TIMEOUT,
     "server_error": ModelResponseErrorType.SERVER,
     "internal_server_error": ModelResponseErrorType.SERVER,
+    "server": ModelResponseErrorType.SERVER,
+    "unmapped": ModelResponseErrorType.UNMAPPED,
 }
 _PERMANENT_ERROR_TYPES = frozenset(
     {
@@ -77,13 +81,36 @@ _PERMANENT_ERROR_TYPES = frozenset(
         "bad_request",
         "context_length_exceeded",
         "context_window_exceeded",
+        "content_policy_violation",
         "forbidden",
+        "image_format_not_supported",
+        "image_download_failed",
+        "image_not_found",
+        "image_too_large",
+        "image_too_small",
+        "image_url_fetch_failed",
+        "image_url_invalid",
+        "image_url_not_supported",
+        "image_url_required",
+        "invalid_image",
+        "invalid_prompt",
         "invalid_request",
         "invalid_request_error",
+        "max_tokens_exceeded",
+        "not_found",
+        "payload_too_large",
+        "payment_required",
+        "permission_denied",
         "permission_error",
         "policy_error",
         "policy_violation",
+        "precondition_failed",
+        "refusal",
+        "string_too_long",
+        "token_limit_exceeded",
         "unauthorized",
+        "unprocessable",
+        "unsupported_image_format",
     }
 )
 
@@ -632,6 +659,16 @@ def _embedded_error(value: object) -> _EmbeddedError:
             code=code,
             error_type=ModelResponseErrorType.UNKNOWN,
         )
+    if (
+        code is not None
+        and type_disposition is _EmbeddedDisposition.TRANSIENT
+        and (normalized_type, code) not in TRANSIENT_MODEL_RESPONSE_CODE_PAIRS
+    ):
+        return _EmbeddedError(
+            disposition=_EmbeddedDisposition.MALFORMED,
+            code=code,
+            error_type=ModelResponseErrorType.UNKNOWN,
+        )
     disposition = code_disposition or type_disposition
     assert disposition is not None
     if normalized_type is ModelResponseErrorType.MISSING:
@@ -714,9 +751,11 @@ def _error_type_from_code(code: int | None) -> ModelResponseErrorType:
         return ModelResponseErrorType.RATE_LIMIT
     if code in {408, 504}:
         return ModelResponseErrorType.UPSTREAM_TIMEOUT
-    if code in {409, 425, 503}:
+    if code in {409, 425, 502}:
         return ModelResponseErrorType.PROVIDER_UNAVAILABLE
-    if code in {500, 502}:
+    if code == 503:
+        return ModelResponseErrorType.OVERLOADED
+    if code == 500:
         return ModelResponseErrorType.SERVER
     return ModelResponseErrorType.PERMANENT_REQUEST
 

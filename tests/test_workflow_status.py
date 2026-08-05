@@ -288,6 +288,115 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
         assert marker not in rendered
 
 
+@pytest.mark.parametrize(
+    ("failure_subtype", "response_summary"),
+    [
+        (
+            ModelFailureSubtype.TRANSIENT_HTTP,
+            ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.UNAVAILABLE,
+                error_code=None,
+                error_type=ModelResponseErrorType.UNAVAILABLE,
+                finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+                choices_count=None,
+                content_state=ModelResponseContentState.UNAVAILABLE,
+            ),
+        ),
+        (
+            ModelFailureSubtype.PERMANENT_HTTP,
+            ModelResponseSummary(
+                http_status=429,
+                error_presence=ModelResponseErrorPresence.UNAVAILABLE,
+                error_code=None,
+                error_type=ModelResponseErrorType.UNAVAILABLE,
+                finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+                choices_count=None,
+                content_state=ModelResponseContentState.UNAVAILABLE,
+            ),
+        ),
+        (
+            ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.NONE,
+                error_code=None,
+                error_type=ModelResponseErrorType.MISSING,
+                finish_reason=ModelResponseFinishReason.STOP,
+                choices_count=1,
+                content_state=ModelResponseContentState.PRESENT,
+            ),
+        ),
+        (
+            ModelFailureSubtype.EMBEDDED_PERMANENT,
+            ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+                error_code=429,
+                error_type=ModelResponseErrorType.RATE_LIMIT,
+                finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+                choices_count=None,
+                content_state=ModelResponseContentState.UNAVAILABLE,
+            ),
+        ),
+        (
+            ModelFailureSubtype.EMPTY_COMPLETION,
+            ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.NONE,
+                error_code=None,
+                error_type=ModelResponseErrorType.MISSING,
+                finish_reason=ModelResponseFinishReason.STOP,
+                choices_count=1,
+                content_state=ModelResponseContentState.PRESENT,
+            ),
+        ),
+        (
+            ModelFailureSubtype.TRANSPORT_READ,
+            ModelResponseSummary(
+                http_status=200,
+                error_presence=ModelResponseErrorPresence.UNAVAILABLE,
+                error_code=None,
+                error_type=ModelResponseErrorType.UNAVAILABLE,
+                finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+                choices_count=None,
+                content_state=ModelResponseContentState.UNAVAILABLE,
+            ),
+        ),
+    ],
+)
+def test_diagnostic_rejects_response_summary_that_contradicts_subtype(
+    failure_subtype: ModelFailureSubtype,
+    response_summary: ModelResponseSummary,
+) -> None:
+    with pytest.raises(ValueError, match="diagnostic event"):
+        attempt_event(
+            event=DiagnosticEvent.FAILURE,
+            stage=WorkflowStage.V1_CORE,
+            attempt=1,
+            total_attempts=2,
+            category=FailureCategory.MODEL,
+            failure_subtype=failure_subtype,
+            response_summary=response_summary,
+        )
+    raw_event = {
+        "event": "failure",
+        "stage": "v1_core",
+        "attempt": 1,
+        "total_attempts": 2,
+        "category": "model",
+        "failure_subtype": failure_subtype.value,
+        "response_summary": response_summary.as_dict(),
+    }
+    assert (
+        captured_diagnostic_event(
+            raw_event,
+            timestamp="2042-04-10T10:00:04+00:00",
+        )
+        is None
+    )
+
+
 def test_status_attempt_messages_render_optional_validated_subtype() -> None:
     legacy_retry = attempt_event(
         event=DiagnosticEvent.RETRY_DECISION,

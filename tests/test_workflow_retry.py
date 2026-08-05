@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from contextlib import redirect_stderr
 from pathlib import Path
 
 import pytest
@@ -310,7 +312,6 @@ async def test_retry_backoff_is_outside_the_attempt_deadline() -> None:
 
 @pytest.mark.asyncio
 async def test_closed_response_summary_is_emitted_without_raw_provider_data(
-    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
     summary = ModelResponseSummary(
@@ -327,31 +328,104 @@ async def test_closed_response_summary_is_emitted_without_raw_provider_data(
     async def operation() -> str:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            raise RetryableModelError(
-                subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
-                retry_after_seconds=0,
-                response_summary=summary,
-            )
-        return "accepted"
+        raise RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            retry_after_seconds=0,
+            response_summary=summary,
+        )
 
     async def no_backoff(_delay: float) -> None:
         return None
 
-    assert (
-        await run_model_operation(
-            operation,
-            retries=1,
-            stage=WorkflowStage.V1_CORE,
-            sleep=no_backoff,
-        )
-        == "accepted"
+    evidence = tmp_path / "ordered.jsonl"
+    descriptor = os.open(
+        evidence,
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        0o600,
     )
-    rendered = capsys.readouterr().err
-    event = next(
-        item for item in _diagnostics(rendered) if item["event"] == "retry_decision"
-    )
-    assert event["response_summary"] == summary.as_dict()
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        with redirect_stderr(stream):
+            for stage in (
+                WorkflowStage.V1_CORE,
+                WorkflowStage.V1_JOD,
+                WorkflowStage.V1_EXPERIENCE,
+            ):
+                with pytest.raises(RetryableModelError):
+                    await run_model_operation(
+                        operation,
+                        retries=1,
+                        stage=stage,
+                        sleep=no_backoff,
+                    )
+
+    assert calls == 6
+    assert evidence.stat().st_mode & 0o777 == 0o600
+    rendered = evidence.read_text(encoding="utf-8")
+    retained = _diagnostics(rendered)
+    operation_events = [
+        "attempt_start",
+        "attempt_elapsed",
+        "retry_decision",
+        "attempt_start",
+        "attempt_elapsed",
+        "retry_decision",
+        "failure",
+    ]
+    assert len(retained) == 21
+    assert len(retained) > 20
+    assert [item["event"] for item in retained] == operation_events * 3
+    for offset, stage in zip(
+        (0, 7, 14),
+        ("v1_core", "v1_jod", "v1_experience"),
+        strict=True,
+    ):
+        operation_slice = retained[offset : offset + 7]
+        assert all(item["stage"] == stage for item in operation_slice)
+        assert [operation_slice[index]["attempt"] for index in (0, 2, 3, 5, 6)] == [
+            1,
+            1,
+            2,
+            2,
+            2,
+        ]
+        assert operation_slice[2]["retry"] is True
+        assert operation_slice[5]["retry"] is False
+        for index in (2, 5, 6):
+            assert operation_slice[index]["response_summary"] == summary.as_dict()
+    assert retained[0]["event"] == "attempt_start"
+    assert retained[0]["stage"] == "v1_core"
+    assert all(item["total_attempts"] == 2 for item in retained)
+    expected_keys = {
+        "attempt_start": {"event", "stage", "attempt", "total_attempts"},
+        "attempt_elapsed": {
+            "event",
+            "stage",
+            "attempt",
+            "total_attempts",
+            "elapsed_seconds",
+        },
+        "retry_decision": {
+            "event",
+            "stage",
+            "attempt",
+            "total_attempts",
+            "retry",
+            "category",
+            "failure_subtype",
+            "response_summary",
+        },
+        "failure": {
+            "event",
+            "stage",
+            "attempt",
+            "total_attempts",
+            "category",
+            "failure_subtype",
+            "response_summary",
+        },
+    }
+    assert all(set(item) == expected_keys[item["event"]] for item in retained)
     for marker in (
         "RAW-PROMPT-MARKER",
         "RAW-RESPONSE-MARKER",
@@ -360,22 +434,6 @@ async def test_closed_response_summary_is_emitted_without_raw_provider_data(
         "/private/operator/path",
     ):
         assert marker not in rendered
-
-    evidence = tmp_path / "ordered.jsonl"
-    evidence.touch(mode=0o600)
-    with evidence.open("w", encoding="utf-8") as stream:
-        stream.write(rendered)
-    assert evidence.stat().st_mode & 0o777 == 0o600
-    retained = _diagnostics(evidence.read_text(encoding="utf-8"))
-    assert [item["event"] for item in retained] == [
-        "attempt_start",
-        "attempt_elapsed",
-        "retry_decision",
-        "attempt_start",
-        "attempt_elapsed",
-        "attempt_completion",
-    ]
-    assert retained[2]["response_summary"] == summary.as_dict()
 
 
 @pytest.mark.asyncio

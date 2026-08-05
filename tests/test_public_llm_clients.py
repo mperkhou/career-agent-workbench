@@ -1608,55 +1608,43 @@ def test_api_generation_rejects_nonstandard_json_without_retry(
 
 
 @pytest.mark.parametrize(
-    ("error_object", "expected_type"),
+    ("code", "error_type", "expected_type"),
     [
-        ({"code": 429}, ModelResponseErrorType.RATE_LIMIT),
-        ({"code": 502}, ModelResponseErrorType.SERVER),
-        ({"code": 503}, ModelResponseErrorType.PROVIDER_UNAVAILABLE),
-        ({"code": 504}, ModelResponseErrorType.UPSTREAM_TIMEOUT),
-        (
-            {"metadata": {"error_type": "timeout"}},
-            ModelResponseErrorType.UPSTREAM_TIMEOUT,
-        ),
-        (
-            {"metadata": {"error_type": "provider_unavailable"}},
-            ModelResponseErrorType.PROVIDER_UNAVAILABLE,
-        ),
-        (
-            {"metadata": {"error_type": "provider_overloaded"}},
-            ModelResponseErrorType.OVERLOADED,
-        ),
-        (
-            {
-                "type": "upstream_timeout",
-                "metadata": {"error_type": "timeout"},
-            },
-            ModelResponseErrorType.UPSTREAM_TIMEOUT,
-        ),
+        (429, "rate_limit_exceeded", ModelResponseErrorType.RATE_LIMIT),
+        (503, "provider_overloaded", ModelResponseErrorType.OVERLOADED),
+        (502, "provider_unavailable", ModelResponseErrorType.PROVIDER_UNAVAILABLE),
+        (500, "server", ModelResponseErrorType.SERVER),
+        (504, "timeout", ModelResponseErrorType.UPSTREAM_TIMEOUT),
+        (500, "unmapped", ModelResponseErrorType.UNMAPPED),
     ],
 )
-def test_api_embedded_transient_top_level_error_retries_with_closed_summary(
-    error_object: dict[str, object],
+def test_api_canonical_embedded_transient_pair_retries_with_closed_summary(
+    code: int,
+    error_type: str,
     expected_type: ModelResponseErrorType,
 ) -> None:
     calls = 0
     sleeps: list[float] = []
 
+    def embedded_response() -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"retry-after": "999"},
+            json={
+                "error": {
+                    "code": code,
+                    "metadata": {"error_type": error_type},
+                    "message": "RAW-ERROR-MESSAGE",
+                    "provider": "PRIVATE-PROVIDER-MARKER",
+                }
+            },
+        )
+
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return httpx.Response(
-                200,
-                headers={"retry-after": "999"},
-                json={
-                    "error": {
-                        **error_object,
-                        "message": "RAW-ERROR-MESSAGE",
-                        "provider": "PRIVATE-PROVIDER-MARKER",
-                    }
-                },
-            )
+            return embedded_response()
         return _api_response("Synthetic recovery")
 
     async def sleep(delay: float) -> None:
@@ -1680,21 +1668,31 @@ def test_api_embedded_transient_top_level_error_retries_with_closed_summary(
     assert calls == 2
     assert sleeps == [120.0]
 
-    summary = ModelResponseSummary(
+    inspection_client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=1,
+        transport=httpx.MockTransport(lambda _: embedded_response()),
+    )
+
+    async def inspect_failure() -> RetryableModelError:
+        with pytest.raises(RetryableModelError) as captured:
+            await inspection_client.generate_text("synthetic prompt")
+        await inspection_client.aclose()
+        return captured.value
+
+    error = asyncio.run(inspect_failure())
+    assert error.subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT
+    assert error.response_summary == ModelResponseSummary(
         http_status=200,
         error_presence=ModelResponseErrorPresence.TOP_LEVEL,
-        error_code=(
-            error_object.get("code") if type(error_object.get("code")) is int else None
-        ),
+        error_code=code,
         error_type=expected_type,
         finish_reason=ModelResponseFinishReason.UNAVAILABLE,
         choices_count=None,
         content_state=ModelResponseContentState.UNAVAILABLE,
-    )
-    error = RetryableModelError(
-        subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
-        retry_after_seconds=120,
-        response_summary=summary,
     )
     rendered = f"{error!r} {error}"
     assert error.retry_after_seconds == 120
@@ -1702,12 +1700,55 @@ def test_api_embedded_transient_top_level_error_retries_with_closed_summary(
     assert "PRIVATE-PROVIDER-MARKER" not in rendered
 
 
+@pytest.mark.parametrize(
+    ("error_object", "expected_type"),
+    [
+        ({"code": 429}, ModelResponseErrorType.RATE_LIMIT),
+        ({"code": 502}, ModelResponseErrorType.PROVIDER_UNAVAILABLE),
+        ({"code": 503}, ModelResponseErrorType.OVERLOADED),
+        ({"code": 500}, ModelResponseErrorType.SERVER),
+        ({"code": 504}, ModelResponseErrorType.UPSTREAM_TIMEOUT),
+        (
+            {"metadata": {"error_type": "timeout"}},
+            ModelResponseErrorType.UPSTREAM_TIMEOUT,
+        ),
+    ],
+)
+def test_api_supported_code_only_and_type_only_embedded_shapes(
+    error_object: dict[str, object],
+    expected_type: ModelResponseErrorType,
+) -> None:
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=1,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"error": error_object})
+        ),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(RetryableModelError) as captured:
+            await client.generate_text("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT
+        assert captured.value.response_summary is not None
+        assert captured.value.response_summary.error_type is expected_type
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_api_choice_embedded_error_requires_error_finish_reason() -> None:
     responses = [
         {
             "choices": [
                 {
-                    "error": {"metadata": {"error_type": "provider_unavailable"}},
+                    "error": {
+                        "code": 503,
+                        "metadata": {"error_type": "provider_overloaded"},
+                    },
                     "finish_reason": "error",
                     "message": {"content": "partial invalid {"},
                 }
@@ -1779,15 +1820,31 @@ def test_api_choice_embedded_error_requires_error_finish_reason() -> None:
 
 
 @pytest.mark.parametrize(
-    "error_object",
+    ("code", "error_type"),
     [
-        {"code": 400, "metadata": {"error_type": "invalid_request_error"}},
-        {"type": "policy_error"},
-        {"metadata": {"error_type": "context_length_exceeded"}},
+        (403, "permission_denied"),
+        (400, "invalid_prompt"),
+        (400, "content_policy_violation"),
+        (402, "payment_required"),
+        (400, "max_tokens_exceeded"),
+        (400, "token_limit_exceeded"),
+        (400, "string_too_long"),
+        (404, "not_found"),
+        (412, "precondition_failed"),
+        (413, "payload_too_large"),
+        (422, "unprocessable"),
+        (400, "refusal"),
+        (400, "invalid_image"),
+        (400, "image_too_large"),
+        (400, "image_too_small"),
+        (400, "unsupported_image_format"),
+        (404, "image_not_found"),
+        (400, "image_download_failed"),
     ],
 )
-def test_api_permanent_embedded_error_wins_over_partial_content(
-    error_object: dict[str, object],
+def test_api_canonical_permanent_embedded_error_never_retries(
+    code: int,
+    error_type: str,
 ) -> None:
     calls = 0
 
@@ -1797,7 +1854,11 @@ def test_api_permanent_embedded_error_wins_over_partial_content(
         return httpx.Response(
             200,
             json={
-                "error": error_object,
+                "error": {
+                    "code": code,
+                    "metadata": {"error_type": error_type},
+                    "message": "RAW-PROVIDER-ERROR",
+                },
                 "choices": [
                     {
                         "message": {"content": "{invalid generated JSON"},
@@ -1821,9 +1882,52 @@ def test_api_permanent_embedded_error_wins_over_partial_content(
             await client.generate_json("synthetic prompt")
         assert captured.value.subtype is ModelFailureSubtype.EMBEDDED_PERMANENT
         assert captured.value.response_summary is not None
+        assert captured.value.response_summary.error_code == code
+        assert captured.value.response_summary.error_type is (
+            ModelResponseErrorType.PERMANENT_REQUEST
+        )
         assert captured.value.response_summary.content_state is (
             ModelResponseContentState.PRESENT
         )
+        assert "RAW-PROVIDER-ERROR" not in repr(captured.value)
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "error_object",
+    [
+        {"code": 400, "metadata": {"error_type": "invalid_request_error"}},
+        {"type": "policy_error"},
+        {"metadata": {"error_type": "context_length_exceeded"}},
+        {"metadata": {"error_type": "image_url_fetch_failed"}},
+    ],
+)
+def test_api_supported_permanent_alias_never_retries(
+    error_object: dict[str, object],
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"error": error_object})
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=3,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await client.generate_text("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.EMBEDDED_PERMANENT
         await client.aclose()
 
     asyncio.run(scenario())
@@ -1841,6 +1945,13 @@ def test_api_permanent_embedded_error_wins_over_partial_content(
             "metadata": {"error_type": "invalid_request_error"},
         },
         {"code": 400, "metadata": {"error_type": "timeout"}},
+        {"code": 429, "metadata": {"error_type": "server"}},
+        {"code": 500, "metadata": {"error_type": "rate_limit_exceeded"}},
+        {"code": 502, "metadata": {"error_type": "provider_overloaded"}},
+        {"code": 503, "metadata": {"error_type": "provider_unavailable"}},
+        {"code": 504, "metadata": {"error_type": "unmapped"}},
+        {"code": 500, "metadata": {"error_type": "permission_denied"}},
+        {"code": 429, "metadata": {"error_type": "unknown-provider-type"}},
         {"metadata": "invalid"},
     ],
 )

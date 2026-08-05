@@ -978,6 +978,8 @@ def test_evidence_reader_uses_exact_byte_digests_without_exposing_content(
 
     exposed = " ".join((repr(evidence), prompt, repr(audit)))
     assert yaml_only_sentinel not in exposed
+    assert "current_text of every change must byte-for-byte equal" in prompt
+    assert "return an empty changes list" in prompt
     assert (
         candidate["professional_experience"]["jobs"][0]["bullet_points"][0]["text"]
         == PROPOSED_BULLET

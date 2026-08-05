@@ -16,12 +16,21 @@ import secrets
 import stat
 import subprocess
 import unicodedata
+from time import monotonic
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
+
+from career_agent_workbench.workflow_diagnostics import (
+    DiagnosticEvent,
+    FailureCategory,
+    WorkflowStage,
+    attempt_event,
+    emit_diagnostic,
+)
 
 MAX_LOGICAL_VALUE_BYTES = 256
 MAX_PROMPT_BYTES = 524_288
@@ -402,23 +411,105 @@ class CodexProcessRunner:
 
     def run(self, request: ModelRequest, /) -> ModelResult:
         initial = _snapshot_model_request(request)
+        diagnostic_stage = _diagnostic_stage(initial.config.workflow)
 
         for attempt in range(1, initial.max_attempts + 1):
             current = _snapshot_model_request(request)
             if not _request_snapshots_match(initial, current):
                 raise CodexConfigurationError("Invalid model request.")
             process = _snapshot_process_config(self._config)
+            started = monotonic()
+            if diagnostic_stage is not None:
+                emit_diagnostic(
+                    attempt_event(
+                        event=DiagnosticEvent.ATTEMPT_START,
+                        stage=diagnostic_stage,
+                        attempt=attempt,
+                        total_attempts=initial.max_attempts,
+                    )
+                )
             outcome, failure, retryable = self._run_attempt(
                 current,
                 process,
                 attempt,
             )
+            elapsed = monotonic() - started
+            if diagnostic_stage is not None:
+                emit_diagnostic(
+                    attempt_event(
+                        event=DiagnosticEvent.ATTEMPT_ELAPSED,
+                        stage=diagnostic_stage,
+                        attempt=attempt,
+                        total_attempts=initial.max_attempts,
+                        elapsed_seconds=elapsed,
+                    )
+                )
             if outcome is not None:
+                if diagnostic_stage is not None:
+                    emit_diagnostic(
+                        attempt_event(
+                            event=DiagnosticEvent.ATTEMPT_COMPLETION,
+                            stage=diagnostic_stage,
+                            attempt=attempt,
+                            total_attempts=initial.max_attempts,
+                        )
+                    )
                 return outcome
             if failure is None:
                 raise CodexExecutionError("Codex execution failed.")
             if retryable and attempt < initial.max_attempts:
+                if diagnostic_stage is not None:
+                    emit_diagnostic(
+                        attempt_event(
+                            event=DiagnosticEvent.TIMEOUT,
+                            stage=diagnostic_stage,
+                            attempt=attempt,
+                            total_attempts=initial.max_attempts,
+                            category=FailureCategory.TIMEOUT,
+                        )
+                    )
+                    emit_diagnostic(
+                        attempt_event(
+                            event=DiagnosticEvent.RETRY_DECISION,
+                            stage=diagnostic_stage,
+                            attempt=attempt,
+                            total_attempts=initial.max_attempts,
+                            retry=True,
+                            category=FailureCategory.TIMEOUT,
+                        )
+                    )
                 continue
+            if diagnostic_stage is not None:
+                category = _diagnostic_failure_category(failure)
+                if category is FailureCategory.TIMEOUT:
+                    emit_diagnostic(
+                        attempt_event(
+                            event=DiagnosticEvent.TIMEOUT,
+                            stage=diagnostic_stage,
+                            attempt=attempt,
+                            total_attempts=initial.max_attempts,
+                            category=category,
+                        )
+                    )
+                emit_diagnostic(
+                    attempt_event(
+                        event=DiagnosticEvent.RETRY_DECISION,
+                        stage=diagnostic_stage,
+                        attempt=attempt,
+                        total_attempts=initial.max_attempts,
+                        retry=False,
+                        category=category,
+                    )
+                )
+                emit_diagnostic(
+                    attempt_event(
+                        event=DiagnosticEvent.FAILURE,
+                        stage=diagnostic_stage,
+                        attempt=attempt,
+                        total_attempts=initial.max_attempts,
+                        category=category,
+                    )
+                )
             raise failure
         raise CodexExecutionError("Codex execution failed.")
 
@@ -495,11 +586,32 @@ class CodexProcessRunner:
             return (
                 None,
                 failure,
-                type(failure) is CodexExecutionError,
+                False,
             )
         if outcome is None:
             return None, CodexExecutionError("Codex execution failed."), False
         return outcome, None, False
+
+
+def _diagnostic_stage(workflow: str) -> WorkflowStage | None:
+    return {
+        "manual": WorkflowStage.MANUAL,
+        "manual_pass": WorkflowStage.MANUAL,
+        "highlight": WorkflowStage.HIGHLIGHT,
+        "highlighting": WorkflowStage.HIGHLIGHT,
+    }.get(workflow)
+
+
+def _diagnostic_failure_category(error: CodexRunnerError) -> FailureCategory:
+    if type(error) is CodexTimeoutError:
+        return FailureCategory.TIMEOUT
+    if type(error) is CodexConfigurationError:
+        return FailureCategory.CONFIG
+    if type(error) is CodexOutputError:
+        return FailureCategory.OUTPUT
+    if type(error) in {CodexCleanupError, CodexCancellationError}:
+        return FailureCategory.POLICY
+    return FailureCategory.PROCESS
 
 
 def _snapshot_model_config(value: object) -> CodexModelConfig:
@@ -738,8 +850,10 @@ def _classified_attempt_failure(
     caught: BaseException,
 ) -> tuple[None, CodexRunnerError, bool]:
     caught_type = type(caught)
-    if caught_type in {subprocess.TimeoutExpired, TimeoutError, CodexTimeoutError}:
+    if caught_type is subprocess.TimeoutExpired:
         return None, CodexTimeoutError("Codex execution timed out."), True
+    if caught_type in {TimeoutError, CodexTimeoutError}:
+        return None, CodexTimeoutError("Codex execution timed out."), False
     if caught_type in {
         asyncio.CancelledError,
         KeyboardInterrupt,
@@ -750,7 +864,7 @@ def _classified_attempt_failure(
         return None, CodexConfigurationError("Invalid Codex configuration."), False
     if caught_type is CodexOutputError:
         return None, CodexOutputError("Codex output is invalid."), False
-    return None, CodexExecutionError("Codex execution failed."), True
+    return None, CodexExecutionError("Codex execution failed."), False
 
 
 def _validate_logical_value(value: object, *, allow_empty: bool) -> None:
@@ -991,9 +1105,9 @@ def _build_command(
 ) -> tuple[str, ...]:
     parts = [
         os.fspath(process.executable),
-        *process.argv,
         "--ask-for-approval",
         "never",
+        *process.argv,
         "--sandbox",
         "read-only",
         "--cd",

@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
 from types import SimpleNamespace
 from pathlib import Path
 
+import httpx
 import pytest
 
 from career_agent_workbench import (
     cli_paths,
     jod_cleaner_audit,
     resume_refinement_cli,
+    workflow_retry,
     webapp,
 )
 from career_agent_workbench.application_state import (
     MAX_QUERY_RESULTS,
     ApplicationStateStore,
 )
+from career_agent_workbench.api_client import ApiLlmClient
 from career_agent_workbench.config import (
     RuntimeConfig,
     RuntimeOverrides,
@@ -24,6 +29,18 @@ from career_agent_workbench.config import (
     WorkspaceMember,
     WorkspacePaths,
     load_runtime_config,
+)
+from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest
+from career_agent_workbench.errors import (
+    LlmError,
+    LlmTimeoutError,
+    ModelFailureSubtype,
+    NonRetryableModelError,
+    RetryableModelError,
+)
+from career_agent_workbench.resume_refinement import (
+    ResumePatchError,
+    parse_resume_patch_response,
 )
 from career_agent_workbench.workflows import matching
 
@@ -39,6 +56,29 @@ STATE_OPTIONS = {
     "--tmp-dir",
     "--download-dir",
 }
+
+
+def _synthetic_api_client(
+    responses: list[str],
+    requests: list[httpx.Request],
+) -> ApiLlmClient:
+    response_iterator = iter(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": next(response_iterator)}}]},
+        )
+
+    return ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=1,
+        transport=httpx.MockTransport(handler),
+    )
 
 
 def _assert_state_defaults_are_none(parser: argparse.ArgumentParser) -> None:
@@ -459,6 +499,11 @@ def test_refinement_console_composes_resolved_runner_and_workflow(
         def __init__(self, supplied_paths):
             captured["store_paths"] = supplied_paths
 
+        def list_applications(self, scope, *, limit):
+            assert scope == "active"
+            assert limit == MAX_QUERY_RESULTS
+            return (SimpleNamespace(job_id="fictional-job"),)
+
     class FakeRunner:
         def __init__(self, supplied_settings, **kwargs):
             captured["runner"] = (supplied_settings, kwargs)
@@ -474,9 +519,455 @@ def test_refinement_console_composes_resolved_runner_and_workflow(
     monkeypatch.setattr(resume_refinement_cli, "_ConfiguredLlmRunner", FakeRunner)
     monkeypatch.setattr(resume_refinement_cli, "refine_resume_for_job", fake_refine)
 
-    assert resume_refinement_cli.main(["--job-id", "fictional-job"]) == 0
+    assert resume_refinement_cli.main(["--all-active"]) == 0
     assert captured["store_paths"] is paths
     assert captured["runner"][0] is settings
     assert captured["workflow"]["paths"] is paths
     assert captured["workflow"]["job_id"] == "fictional-job"
     assert "processed" in capsys.readouterr().out
+
+
+def test_second_pass_config_only_is_model_and_state_free(
+    monkeypatch,
+    capsys,
+) -> None:
+    config = RuntimeConfig(paths=WorkspacePaths(), settings=Settings(), env_file=None)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "load_command_config",
+        lambda *_a, **_k: config,
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "ApplicationStateStore",
+        lambda *_a, **_k: pytest.fail("config-only created a state store"),
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "_ConfiguredLlmRunner",
+        lambda *_a, **_k: pytest.fail("config-only created a model runner"),
+    )
+
+    assert resume_refinement_cli.main(["--config-only"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"config_only": True}
+    event = json.loads(captured.err)
+    assert event["stage"] == "v2_critique"
+    assert event["model"] == "z-ai/glm-5.2"
+    assert event["timeout_seconds"] == 600.0
+    assert event["retry_count"] == 1
+    assert event["total_attempts"] == 2
+
+
+@pytest.mark.parametrize(
+    ("failures", "expected_calls", "expected_attempt"),
+    [
+        ((LlmTimeoutError("synthetic"),), 2, 2),
+        (
+            (
+                RetryableModelError(
+                    subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+                    http_status=503,
+                    retry_after_seconds=0,
+                ),
+            ),
+            2,
+            2,
+        ),
+        (
+            (
+                RetryableModelError(
+                    subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+                    retry_after_seconds=0,
+                ),
+            ),
+            2,
+            2,
+        ),
+        ((LlmError("synthetic"),), 1, None),
+        (
+            (
+                NonRetryableModelError(
+                    subtype=ModelFailureSubtype.PERMANENT_HTTP,
+                    http_status=400,
+                ),
+            ),
+            1,
+            None,
+        ),
+        (
+            (
+                NonRetryableModelError(
+                    subtype=ModelFailureSubtype.EMBEDDED_PERMANENT,
+                ),
+            ),
+            1,
+            None,
+        ),
+    ],
+)
+def test_second_pass_uses_typed_retry_contract(
+    monkeypatch,
+    failures: tuple[Exception, ...],
+    expected_calls: int,
+    expected_attempt: int | None,
+) -> None:
+    observed_deadlines: list[float | None] = []
+    real_run_model_operation = resume_refinement_cli.run_model_operation
+
+    async def recorded_run_model_operation(operation, **kwargs):
+        observed_deadlines.append(kwargs.get("timeout_seconds"))
+        return await real_run_model_operation(operation, **kwargs)
+
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "run_model_operation",
+        recorded_run_model_operation,
+    )
+
+    class FakeClient:
+        model = "synthetic-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_json(self, _prompt):
+            self.calls += 1
+            if self.calls <= len(failures):
+                raise failures[self.calls - 1]
+            return {"synthetic": True}
+
+        async def aclose(self):
+            return None
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=1,
+        timeout_seconds=600,
+    )
+    request = ModelRequest(
+        prompt="Synthetic prompt.",
+        config=CodexModelConfig(
+            model="synthetic-model",
+            reasoning_effort="",
+            workflow="refinement",
+        ),
+    )
+    if expected_attempt is None:
+        with pytest.raises(LlmError):
+            runner.run(request)
+    else:
+        result = runner.run(request)
+        assert result.model_metadata["attempt"] == expected_attempt
+    assert client.calls == expected_calls
+    assert observed_deadlines == [600]
+
+
+def test_second_pass_owned_deadline_retries_one_boundary_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        model = "synthetic-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.cleaned = False
+
+        async def generate_json(self, _prompt):
+            self.calls += 1
+            if self.calls == 1:
+                try:
+                    await asyncio.sleep(60)
+                finally:
+                    self.cleaned = True
+            return {"synthetic": True}
+
+        async def aclose(self):
+            return None
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    monkeypatch.setattr(workflow_retry, "DEFAULT_WORKFLOW_BACKOFF_SECONDS", 0)
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=1,
+        timeout_seconds=0.01,
+    )
+    result = runner.run(
+        ModelRequest(
+            prompt="Synthetic prompt.",
+            config=CodexModelConfig(
+                model="synthetic-model",
+                reasoning_effort="",
+                workflow="refinement",
+            ),
+        )
+    )
+    assert result.model_metadata["attempt"] == 2
+    assert client.calls == 2
+    assert client.cleaned is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"schema_version":"governed_resume_patch.v1","changes":[]}',
+        '```json\n{"schema_version":"governed_resume_patch.v1","changes":[]}\n```',
+        "Here is the requested patch:\n```json\n"
+        '{"schema_version":"governed_resume_patch.v1","changes":[]}'
+        "\n```\nDone.",
+    ],
+)
+def test_second_pass_accepts_existing_json_generation_wrappers(
+    monkeypatch: pytest.MonkeyPatch,
+    response: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    client = _synthetic_api_client([response], requests)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=2,
+        timeout_seconds=600,
+    )
+
+    result = runner.run(
+        ModelRequest(
+            prompt="Synthetic prompt.",
+            config=CodexModelConfig(
+                model="synthetic-model",
+                reasoning_effort="",
+                workflow="refinement",
+            ),
+        )
+    )
+
+    assert result.response == (
+        '{"changes":[],"schema_version":"governed_resume_patch.v1"}'
+    )
+    assert parse_resume_patch_response(result.response).changes == ()
+    assert len(requests) == 1
+
+
+def test_second_pass_invalid_json_then_valid_json_uses_next_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    requests: list[httpx.Request] = []
+    client = _synthetic_api_client(
+        [
+            "not-json",
+            '{"schema_version":"governed_resume_patch.v1","changes":[]}',
+        ],
+        requests,
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    monkeypatch.setattr(workflow_retry, "DEFAULT_WORKFLOW_BACKOFF_SECONDS", 0)
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=2,
+        timeout_seconds=600,
+    )
+    request = ModelRequest(
+        prompt="Synthetic prompt.",
+        config=CodexModelConfig(
+            model="synthetic-model",
+            reasoning_effort="",
+            workflow="refinement",
+        ),
+    )
+
+    result = runner.run(request)
+
+    assert result.model_metadata["attempt"] == 2
+    assert len(requests) == 2
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().err.splitlines()
+        if line.strip()
+    ]
+    assert [
+        event["attempt"] for event in events if event["event"] == "attempt_start"
+    ] == [1, 2]
+    decision = next(event for event in events if event["event"] == "retry_decision")
+    assert decision["retry"] is True
+    assert decision["failure_subtype"] == "invalid_generation_json"
+    completion = next(
+        event for event in events if event["event"] == "attempt_completion"
+    )
+    assert completion["attempt"] == 2
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["not-json", '{"score": NaN}', '{"score": Infinity}'],
+)
+def test_second_pass_invalid_json_exhausts_bounded_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    response: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    client = _synthetic_api_client([response, response, response], requests)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    monkeypatch.setattr(workflow_retry, "DEFAULT_WORKFLOW_BACKOFF_SECONDS", 0)
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=2,
+        timeout_seconds=600,
+    )
+    request = ModelRequest(
+        prompt="Synthetic prompt.",
+        config=CodexModelConfig(
+            model="synthetic-model",
+            reasoning_effort="",
+            workflow="refinement",
+        ),
+    )
+
+    with pytest.raises(RetryableModelError) as raised:
+        runner.run(request)
+
+    assert raised.value.subtype is ModelFailureSubtype.INVALID_GENERATION_JSON
+    assert len(requests) == 3
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().err.splitlines()
+        if line.strip()
+    ]
+    assert [
+        event["attempt"] for event in events if event["event"] == "attempt_start"
+    ] == [1, 2, 3]
+    assert [
+        event["retry"] for event in events if event["event"] == "retry_decision"
+    ] == [True, True, False]
+    failure = [event for event in events if event["event"] == "failure"]
+    assert len(failure) == 1
+    assert failure[0]["failure_subtype"] == "invalid_generation_json"
+
+
+def test_second_pass_valid_json_schema_failure_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+    client = _synthetic_api_client(
+        ['{"schema_version":"wrong","changes":[]}'],
+        requests,
+    )
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=2,
+        timeout_seconds=600,
+    )
+    result = runner.run(
+        ModelRequest(
+            prompt="Synthetic prompt.",
+            config=CodexModelConfig(
+                model="synthetic-model",
+                reasoning_effort="",
+                workflow="refinement",
+            ),
+        )
+    )
+
+    with pytest.raises(ResumePatchError):
+        parse_resume_patch_response(result.response)
+    assert len(requests) == 1
+
+
+def test_second_pass_isolates_rows_and_artifact_exports(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    paths = WorkspacePaths(
+        root=tmp_path,
+        database=tmp_path / "state.sqlite3",
+        output_dir=tmp_path / "output",
+        master_resume=tmp_path / "resume.yml",
+        master_resume_text=tmp_path / "resume.txt",
+    )
+    config = RuntimeConfig(paths=paths, settings=Settings(), env_file=None)
+    attempts: list[str] = []
+
+    class FakeStore:
+        def __init__(self, _paths):
+            pass
+
+    class FakeRunner:
+        def __init__(self, *_a, **_k):
+            pass
+
+    def refine(**kwargs):
+        attempts.append(kwargs["job_id"])
+        return SimpleNamespace(job_id=kwargs["job_id"], candidate={})
+
+    def export(**kwargs):
+        if kwargs["job_id"] == "fictional-first":
+            raise OSError("synthetic private path")
+
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "load_command_config",
+        lambda *_a, **_k: config,
+    )
+    monkeypatch.setattr(resume_refinement_cli, "ApplicationStateStore", FakeStore)
+    monkeypatch.setattr(resume_refinement_cli, "_ConfiguredLlmRunner", FakeRunner)
+    monkeypatch.setattr(resume_refinement_cli, "refine_resume_for_job", refine)
+    monkeypatch.setattr(resume_refinement_cli, "export_rendered_resume", export)
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "resolve_private_workspace_path",
+        lambda *_a, **_k: tmp_path / "exports",
+    )
+
+    assert (
+        resume_refinement_cli.main(
+            [
+                "--job-id",
+                "fictional-first",
+                "--job-id",
+                "fictional-later",
+                "--artifact-dir",
+                "exports",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["processed"] == 1
+    assert payload["failed"] == 1
+    assert attempts == ["fictional-first", "fictional-later"]

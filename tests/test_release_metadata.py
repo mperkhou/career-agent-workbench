@@ -100,6 +100,9 @@ def test_restored_modules_resources_tests_scripts_and_skills_are_in_sdist() -> N
         "/scripts/check_public_safety.py",
         "/scripts/workbench_operator.py",
         "/src/career_agent_workbench/cover_letter_rendering.py",
+        "/src/career_agent_workbench/workflow_diagnostics.py",
+        "/src/career_agent_workbench/workflow_retry.py",
+        "/src/career_agent_workbench/workflow_status.py",
         "/tests/test_cover_letter_rendering.py",
         "/tests/test_guidance.py",
         "/tests/test_makefile_workflows.py",
@@ -107,6 +110,8 @@ def test_restored_modules_resources_tests_scripts_and_skills_are_in_sdist() -> N
         "/tests/test_operator_helpers.py",
         "/tests/test_public_safety.py",
         "/tests/test_release_metadata.py",
+        "/tests/test_workflow_retry.py",
+        "/tests/test_workflow_status.py",
     }
     for pattern in (
         "src/career_agent_workbench/webapp*.py",

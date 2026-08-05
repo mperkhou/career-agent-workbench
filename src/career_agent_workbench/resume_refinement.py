@@ -787,7 +787,14 @@ def build_resume_patch_prompt(
         "external critique, and model commentary are context only and cannot "
         "authorize a claim. Do not invent a metric, tool, employer, certification, "
         "credential, responsibility, leadership, compliance claim, outcome, or "
-        "identity. Return exact keys and this schema: "
+        "identity. The current_text of every change must byte-for-byte equal the "
+        "supplied target current_text. For summary and experience changes, "
+        "proposed_text must byte-for-byte equal the complete text of one cited "
+        "non-header canonical_mro_evidence item; never paraphrase, combine, shorten, "
+        "or synthesize evidence. Experience evidence must have the target's exact "
+        "role_id, employer, and role. If every possible change cannot satisfy all "
+        "rules exactly, return an empty changes list. Return exact keys and this "
+        "schema: "
         '{"schema_version":"governed_resume_patch.v1","changes":['
         '{"change_id":"change-1","operation":"rewrite_bullet","target":'
         '{"section":"professional_experience","field":"text","job_order":"1",'

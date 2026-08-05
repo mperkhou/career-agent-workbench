@@ -203,6 +203,69 @@ def test_model_and_remaining_path_overrides_are_presence_aware() -> None:
     assert "workflow-effort" in output and "shared-effort" not in output
 
 
+@pytest.mark.parametrize(
+    ("target", "timeout_flag", "retry_flag", "timeout"),
+    [
+        ("generate-draft-resumes", "--llm-timeout-seconds", "--llm-retries", "300"),
+        ("refine-draft-resumes", "--api-timeout-seconds", "--api-retries", "600"),
+        ("manual-pass-resumes", "--timeout-seconds", "--retry-count", "900"),
+        ("highlight-draft-resumes", "--timeout-seconds", "--retry-count", "900"),
+    ],
+)
+def test_workflow_make_defaults_and_invocation_marker_are_exact(
+    target: str,
+    timeout_flag: str,
+    retry_flag: str,
+    timeout: str,
+) -> None:
+    variables = ("JOB_IDS=fictional-job",) if target == "manual-pass-resumes" else ()
+    tokens = shlex.split(_dry_run(target, *variables))
+    assert tokens[0] == "CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE=make"
+    assert tokens[tokens.index(timeout_flag) + 1] == timeout
+    assert tokens[tokens.index(retry_flag) + 1] == "1"
+
+
+@pytest.mark.parametrize(
+    ("target", "variable", "extra"),
+    [
+        (
+            "manual-pass-resumes",
+            "MANUAL_PASS_CODEX_REASONING_EFFORT=",
+            ("JOB_IDS=fictional-job",),
+        ),
+        (
+            "highlight-draft-resumes",
+            "HIGHLIGHT_CODEX_REASONING_EFFORT=",
+            (),
+        ),
+    ],
+)
+def test_make_preserves_explicit_empty_effort_as_inherit(
+    target: str,
+    variable: str,
+    extra: tuple[str, ...],
+) -> None:
+    tokens = shlex.split(_dry_run(target, *extra, variable))
+    index = tokens.index("--codex-reasoning-effort")
+    assert tokens[index + 1] == ""
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "generate-draft-resumes",
+        "refine-draft-resumes",
+        "manual-pass-resumes",
+        "highlight-draft-resumes",
+    ],
+)
+def test_make_config_only_composition_needs_no_state_selection(target: str) -> None:
+    tokens = shlex.split(_dry_run(target, "CONFIG_ONLY=1"))
+    assert tokens.count("--config-only") == 1
+    assert "--job-id" not in tokens
+    assert "--all-active" not in tokens
+
+
 def test_resume_template_and_highlight_selectors_propagate_once() -> None:
     tokens = shlex.split(
         _dry_run(

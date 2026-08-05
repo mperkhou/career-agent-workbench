@@ -567,7 +567,7 @@ def installed_smoke(expected_prefix: Path) -> None:
 
         module_file = Path(career_agent_workbench.__file__).resolve(strict=True)
         module_file.relative_to(prefix)
-        if career_agent_workbench.__version__ != "2.0.0":
+        if career_agent_workbench.__version__ != "2.1.0":
             raise SafetyCheckError("Public-safety check failed.")
         package = resources.files("career_agent_workbench")
         resume_template = package.joinpath(

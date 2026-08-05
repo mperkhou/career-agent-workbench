@@ -17,7 +17,7 @@ from career_agent_workbench.api_client import (
     _raw_decode_json,
     _ResponseTooLarge,
 )
-from career_agent_workbench.errors import OllamaError
+from career_agent_workbench.errors import OllamaError, OllamaTimeoutError
 
 MAX_RESPONSE_BYTES = 2_000_000
 
@@ -127,6 +127,8 @@ class OllamaClient:
             request_error = OllamaError(
                 "Ollama response exceeds the public size limit."
             )
+        except httpx.TimeoutException:
+            request_error = OllamaTimeoutError("Ollama request timed out.")
         except httpx.HTTPError:
             request_error = OllamaError("Ollama request failed.")
         if request_error is not None:

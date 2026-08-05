@@ -1,5 +1,121 @@
 # Changelog
 
+## [2.1.0] - 2026-08-05
+
+### Changed
+
+- Initialized a documentation-parity workflow to replace the compact fictional
+  resume/MRO with a realistic full-depth public demo, rebuild README examples
+  from that approved source, and reassess diagrams and Flask screenshots behind
+  explicit privacy and user-review gates.
+- Expanded the documentation workflow's demo target to require an original,
+  full-size fictional job posting whose depth and organization are informed by
+  content-free patterns from retained descriptions without copying private
+  posting content or mutating private state.
+- Added an explicitly authorized synthetic live traversal through v1, v2,
+  manual review, and highlighting so README examples and replacement Flask
+  illustrations can use reviewed stored outputs instead of invented workflow
+  results, while keeping the deterministic offline demo unchanged and retaining
+  the four final variant snapshots outside Git for later example review.
+- Added a pre-call compatibility repair requirement so public v1, ARO
+  regeneration, v2, and highlighting batch readers use the canonical bounded
+  application-query maximum instead of an invalid oversized literal.
+- Added a content-free first-draft failure diagnostic and one explicitly
+  bounded recovery run so a synthetic live traversal can identify a local
+  stage and safe exception category without retaining model traffic or career
+  content, while preserving all external variant snapshot directories.
+- Added a pre-live execution-parity phase for mature-equivalent 300/600/900
+  timeout defaults, timeout-only retry semantics, Luna/high highlighting,
+  presence-aware Make/CLI/private-dotenv precedence, model-free effective-
+  configuration checks, row isolation, and bounded content-free Flask action
+  logs before any further synthetic provider run.
+- Narrowed the offline P03D repair gate to the demonstrated API-backed v1/v2
+  defect: one exact workflow-owned retry budget, a closed transient allowlist,
+  and additive legacy-compatible failure subtypes through the existing P03C
+  diagnostic stream and Flask action log. Ollama remains timeout-only,
+  manual/highlighting behavior is unchanged, generalized durable diagnostic
+  ownership/leases/recovery/correlation/final-summary state, composite-Make
+  ownership, and structured viewing are deferred to a future feature release,
+  and another live traversal remains separately gated.
+- After G03D approval, renewed exactly one synthetic `demo-platform-001`
+  traversal under the repaired typed API retry contract: a sanitized
+  model-free preflight must pass before one v1 → v2 → regular-manual →
+  highlighting sequence, each retry setting remains two retries/three total
+  attempts, four external snapshot sets remain retained, and the workflow
+  stops at the first failed stage without an operator rerun.
+- Fixed the revision-10 first-draft state-write blocker by materializing
+  tuple-bearing `AtsDiagnostics` dataclass output into JSON-safe lists before
+  the strict application-state write. A production-shaped offline regression
+  now proves the v1 call site commits through a real disposable state store
+  without relaxing validation, losing diagnostic values or order, changing
+  automatic selection, or weakening expected-revision enforcement; any further
+  live traversal remains separately gated.
+- After G03S approval, authorized one separate post-fix synthetic traversal at
+  the repaired commit: one model-free preflight followed, only on successive
+  success, by one `demo-platform-001` v1, v2, regular-manual, and highlighting
+  invocation. The sequence uses two retries/three total attempts, stops at the
+  first failure without an operator rerun, preserves four untracked external
+  artifact/PDF snapshot sets and a sanitized log, and remains gated before P04.
+- Recorded the consumed P03T outcome without rerunning it: preflight passed;
+  core, JOD, and three experience operations succeeded; then the fourth
+  experience operation exceeded the intended 300-second wall-clock bound and
+  ended after 439.688 seconds as a nonretryable HTTP-200 malformed envelope on
+  attempt one of three. No v1 or later stage was stored, the deterministic
+  baseline and four empty snapshot directories remain unchanged, and its
+  sanitized log passed leakage review.
+- Implemented the offline P03U repair: the configured timeout is now a genuine
+  per-attempt v1/v2 wall-clock deadline, and validated HTTP-200 embedded
+  provider errors plus unusable missing/null/empty completions now flow through
+  the existing single workflow retry budget. The repair preserves exact
+  `retry_count + 1` boundaries, additive legacy-compatible content-free
+  diagnostics, the ATS persistence regression, and unchanged manual/
+  highlighting behavior while leaving the generalized durable-diagnostics
+  platform deferred to 2.2.0. P03U itself made no live call and granted no
+  traversal authority.
+- After G03U PASS, scoped a distinct P03V/G03V recorded synthetic traversal
+  with two additional authority boundaries: committing the amendment starts
+  nothing; a later approval permits one model-free preflight in a fresh
+  implementor task; and only a reviewed preflight PASS plus another explicit
+  approval permits one conditional v1 → v2 → regular-manual →
+  highlighting sequence. The run was required to stop at its first failure,
+  retain all four untracked snapshot/PDF sets and a complete source-time
+  sanitized log, and claim README evidence only if every stage passed.
+- Recorded the revision-14 preflight false negative: the fresh task stopped
+  before configuration or workspace access because its task-binding validator
+  incorrectly required a standalone scalar match for an ID stored inside the
+  tracker note. After confirming zero Make, provider, model, Codex, network, or
+  workspace activity, revision 15 authorizes one corrected model-free
+  preflight in the user's designated original implementor task. This one-time
+  task-reuse exception still stops at G03V and grants no live-run authority.
+- Recorded that revision 15 then passed its binding and retained-workspace
+  checks but stopped before evidence creation or any Make target because its
+  generated local orchestration wrapper failed to compile. Revision 16 permits
+  one model-free preflight run directly by the supervisor as four separate
+  config-only Make commands against the same retained synthetic workspace,
+  with no delegation, generated wrapper, or live provider/model/Codex
+  authority.
+- Recorded the revision-16 direct preflight PASS and the user's explicit live-
+  subphase approval. Revision 17 limited execution to one supervisor-owned
+  `demo-platform-001` force-v1 followed conditionally by v2, regular manual,
+  and highlighting, with a stop-first-failure boundary, source-time sanitized
+  logging, retained successful snapshot/PDF sets, and no wrapper or operator
+  rerun.
+- Corrected v2 to use the API client's tolerant JSON-generation boundary, so
+  bare, Markdown-fenced, and supported wrapped JSON are canonicalized before
+  strict patch parsing. Syntactically malformed generated JSON now consumes the
+  existing bounded retry budget, while valid JSON with invalid patch schema,
+  evidence, policy, or application semantics remains nonretryable. The retained
+  public-synthetic v1 then completed v2, regular Sol/high manual review, and
+  Luna/high highlighting with sanitized logs and rendered artifacts outside
+  Git.
+- Recorded the completed public-synthetic result without publishing its raw
+  artifacts: retained v1 was not regenerated; v2, manual, and highlighting each
+  completed on attempt one; v1, v2, and manual retained an ATS diagnostic score
+  of 92; automatic selection ended on `manual`; and persisted prompt/response
+  fields remained absent. Focused coverage passed 557 tests and the complete
+  suite passed 1,247, with lint, format, diff, public-safety, and PDF visual
+  checks also passing.
+
 ## [2.0.0] - In progress
 
 ### Changed

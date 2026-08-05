@@ -183,6 +183,10 @@ class _FakeExecutor:
             raise subprocess.TimeoutExpired(command, timeout)
         if action == "timeout":
             raise subprocess.TimeoutExpired(command, timeout)
+        if action == "generic_timeout":
+            raise TimeoutError("synthetic private timeout detail")
+        if action == "codex_timeout":
+            raise CodexTimeoutError("synthetic private timeout detail")
         if action.startswith("timeout_replace_"):
             target = action.removeprefix("timeout_replace_")
             if target == "executable":
@@ -1297,14 +1301,12 @@ def test_fake_process_success_uses_exact_argv_env_and_cleans_child(
     assert type(call["timeout"]) is float
     assert call["timeout"] == 3.0
     command = call["command"]
-    assert command[:3] == (
+    assert command[:5] == (
         os.fspath(config.executable),
+        "--ask-for-approval",
+        "never",
         "exec",
         "--skip-git-repo-check",
-    )
-    assert ("--ask-for-approval", "never") == (
-        command[3],
-        command[4],
     )
     assert "--sandbox" in command and "read-only" in command
     assert "--cd" in command and os.fspath(config.working_directory) in command
@@ -1332,6 +1334,45 @@ def test_timeout_retries_then_succeeds_and_cleans_each_child(
     result = runner.run(_request(attempts=2))
     assert result.model_metadata["attempt"] == 2
     assert len(executor.calls) == 2
+    assert list(config.tmp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("action", ("generic_timeout", "codex_timeout"))
+def test_only_subprocess_timeout_consumes_codex_retry(
+    tmp_path: Path,
+    action: str,
+) -> None:
+    executor = _FakeExecutor([action, "success"])
+    runner, config = _process_runner(tmp_path, executor)
+
+    with pytest.raises(CodexTimeoutError) as captured:
+        runner.run(_request(attempts=2))
+
+    assert len(executor.calls) == 1
+    assert list(config.tmp_dir.iterdir()) == []
+    assert str(captured.value) == "Codex execution timed out."
+    assert "synthetic private" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("action", "error_type"),
+    [
+        ("nonzero", CodexExecutionError),
+        ("missing", CodexOutputError),
+        ("oversized", CodexOutputError),
+        ("error", CodexExecutionError),
+    ],
+)
+def test_non_timeout_codex_failures_do_not_retry(
+    tmp_path: Path,
+    action: str,
+    error_type: type[Exception],
+) -> None:
+    executor = _FakeExecutor([action])
+    runner, config = _process_runner(tmp_path, executor)
+    with pytest.raises(error_type):
+        runner.run(_request(attempts=2))
+    assert len(executor.calls) == 1
     assert list(config.tmp_dir.iterdir()) == []
 
 

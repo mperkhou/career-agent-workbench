@@ -9,11 +9,14 @@ from career_agent_workbench.config import Settings
 from career_agent_workbench.errors import WorkflowError
 from career_agent_workbench.ollama import OllamaClient
 
+WORKFLOW_API_RETRY_ATTEMPTS = 1
+
 
 def build_llm_client(
     settings: Settings,
     *,
     api_model: str | None = None,
+    timeout_seconds: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ApiLlmClient | OllamaClient:
     """Construct the configured client without making a request."""
@@ -22,7 +25,11 @@ def build_llm_client(
         return OllamaClient(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
-            timeout_seconds=settings.ollama_timeout_seconds,
+            timeout_seconds=(
+                settings.ollama_timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
             transport=transport,
         )
     if provider != "api":
@@ -39,7 +46,12 @@ def build_llm_client(
         base_url=settings.llm_api_base_url,
         model=api_model or settings.llm_api_model,
         api_key=settings.llm_api_key,
-        timeout_seconds=settings.llm_api_timeout_seconds,
+        timeout_seconds=(
+            settings.llm_api_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        ),
+        retry_attempts=WORKFLOW_API_RETRY_ATTEMPTS,
         transport=transport,
     )
 

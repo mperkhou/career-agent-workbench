@@ -63,6 +63,8 @@ SETTING_CASES = (
     ),
     ("llm_api_key", "LLM_API_KEY", "fictional-token-marker", "fictional-token-marker"),
     ("llm_api_timeout_seconds", "LLM_API_TIMEOUT_SECONDS", "361.5", 361.5),
+    ("codex_timeout_seconds", "CODEX_TIMEOUT_SECONDS", "901.5", 901.5),
+    ("codex_retries", "CODEX_RETRIES", "2", 2),
     ("llm_provider", "LLM_PROVIDER", "OlLaMa", "ollama"),
     ("jod_model", "JOD_MODEL", "fictional/jod-model", "fictional/jod-model"),
     (
@@ -257,6 +259,84 @@ def test_complete_precedence_order(
     assert loaded.settings.user_agent == expected
 
 
+def test_setting_source_layers_are_closed_and_presence_aware(tmp_path: Path) -> None:
+    assert _load(tmp_path).setting_source("highlight_codex_model") == "default"
+
+    _write_private_env(
+        tmp_path,
+        (f"{CANONICAL}HIGHLIGHT_CODEX_MODEL=private-model",),
+    )
+    assert _load(tmp_path).setting_source("highlight_codex_model") == "private_dotenv"
+    process = _load(
+        tmp_path,
+        {f"{CANONICAL}HIGHLIGHT_CODEX_MODEL": "process-model"},
+    )
+    assert process.setting_source("highlight_codex_model") == "process"
+
+    direct = _load(
+        tmp_path,
+        overrides=RuntimeOverrides(highlight_codex_model="direct-model"),
+    )
+    assert direct.setting_source("highlight_codex_model") == "cli"
+    make = _load(
+        tmp_path,
+        {"CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE": "make"},
+        RuntimeOverrides(highlight_codex_reasoning_effort=""),
+    )
+    assert make.settings.highlight_codex_reasoning_effort == ""
+    assert make.setting_source("highlight_codex_reasoning_effort") == "make"
+
+
+def test_codex_execution_precedence_keeps_explicit_make_flags_stronger(
+    tmp_path: Path,
+) -> None:
+    _write_private_env(
+        tmp_path,
+        (
+            f"{COMPATIBILITY}CODEX_TIMEOUT_SECONDS=702",
+            f"{COMPATIBILITY}CODEX_RETRIES=3",
+        ),
+    )
+    process = {
+        f"{COMPATIBILITY}CODEX_TIMEOUT_SECONDS": "703",
+        f"{COMPATIBILITY}CODEX_RETRIES": "2",
+    }
+    private = _load(tmp_path)
+    assert private.settings.codex_timeout_seconds == 702
+    assert private.settings.codex_retries == 3
+    assert private.setting_source("codex_timeout_seconds") == "private_dotenv"
+    assert private.setting_source("codex_retries") == "private_dotenv"
+
+    direct = _load(tmp_path, process)
+    assert direct.settings.codex_timeout_seconds == 703
+    assert direct.settings.codex_retries == 2
+    assert direct.setting_source("codex_timeout_seconds") == "process"
+    assert direct.setting_source("codex_retries") == "process"
+
+    cli = _load(
+        tmp_path,
+        process,
+        RuntimeOverrides(codex_timeout_seconds=800, codex_retries=0),
+    )
+    assert cli.settings.codex_timeout_seconds == 800
+    assert cli.settings.codex_retries == 0
+    assert cli.setting_source("codex_timeout_seconds") == "cli"
+    assert cli.setting_source("codex_retries") == "cli"
+
+    make = _load(
+        tmp_path,
+        {
+            **process,
+            "CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE": "make",
+        },
+        RuntimeOverrides(codex_timeout_seconds=900, codex_retries=1),
+    )
+    assert make.settings.codex_timeout_seconds == 900
+    assert make.settings.codex_retries == 1
+    assert make.setting_source("codex_timeout_seconds") == "make"
+    assert make.setting_source("codex_retries") == "make"
+
+
 def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> None:
     settings = _load(tmp_path).settings
 
@@ -264,9 +344,13 @@ def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> No
     assert settings.jod_model == "z-ai/glm-5.2"
     assert settings.core_skill_model == "z-ai/glm-5.2"
     assert settings.second_pass_model == "z-ai/glm-5.2"
+    assert settings.codex_timeout_seconds == 900.0
+    assert settings.codex_retries == 1
+    assert _load(tmp_path).setting_source("codex_timeout_seconds") == "default"
+    assert _load(tmp_path).setting_source("codex_retries") == "default"
     assert settings.manual_pass_codex_model == ""
     assert settings.manual_pass_codex_reasoning_effort == ""
-    assert settings.highlight_codex_model == "gpt-5.6-sol"
+    assert settings.highlight_codex_model == "gpt-5.6-luna"
     assert settings.highlight_codex_reasoning_effort == "high"
 
 
@@ -289,7 +373,7 @@ def test_workflow_defaults_preserve_general_provider_model(tmp_path: Path) -> No
             "highlight_codex_model",
             "HIGHLIGHT_CODEX_MODEL",
             "CODEX_MODEL",
-            "gpt-5.6-sol",
+            "gpt-5.6-luna",
         ),
         (
             "highlight_codex_reasoning_effort",
@@ -322,6 +406,7 @@ def test_workflow_codex_precedence_and_shared_fallback(
     }
 
     assert getattr(_load(tmp_path).settings, field) == "private-canonical-workflow"
+    expected_blank = "" if field.endswith("reasoning_effort") else default
     assert (
         getattr(
             _load(
@@ -355,7 +440,7 @@ def test_workflow_codex_precedence_and_shared_fallback(
             ).settings,
             field,
         )
-        == default
+        == expected_blank
     )
 
 
@@ -574,6 +659,8 @@ def test_valid_scalar_parsing_accepts_natural_and_string_overrides(
             max_results="42",
             ollama_timeout_seconds="182.25",
             llm_api_timeout_seconds=362.5,
+            codex_timeout_seconds="902.25",
+            codex_retries="2",
             llm_provider=" OLLAMA ",
         ),
     )
@@ -582,6 +669,8 @@ def test_valid_scalar_parsing_accepts_natural_and_string_overrides(
     assert loaded.settings.max_results == 42
     assert loaded.settings.ollama_timeout_seconds == 182.25
     assert loaded.settings.llm_api_timeout_seconds == 362.5
+    assert loaded.settings.codex_timeout_seconds == 902.25
+    assert loaded.settings.codex_retries == 2
     assert loaded.settings.llm_provider == "ollama"
 
 
@@ -594,6 +683,9 @@ def test_valid_scalar_parsing_accepts_natural_and_string_overrides(
         ("TIMEOUT_SECONDS", "0", "timeout_seconds"),
         ("OLLAMA_TIMEOUT_SECONDS", "-1", "ollama_timeout_seconds"),
         ("LLM_API_TIMEOUT_SECONDS", "-2", "llm_api_timeout_seconds"),
+        ("CODEX_TIMEOUT_SECONDS", "1801", "codex_timeout_seconds"),
+        ("CODEX_RETRIES", "4", "codex_retries"),
+        ("CODEX_RETRIES", "-1", "codex_retries"),
         ("MAX_RESULTS", "1.5", "max_results"),
         ("MAX_RESULTS", "0", "max_results"),
         ("LLM_PROVIDER", "unsupported-provider-marker", "llm_provider"),
@@ -617,6 +709,8 @@ def test_boolean_is_not_a_positive_integer_or_timeout(tmp_path: Path) -> None:
         _load(tmp_path, overrides=RuntimeOverrides(max_results=True))
     with pytest.raises(InvalidConfigurationError, match="timeout_seconds"):
         _load(tmp_path, overrides=RuntimeOverrides(timeout_seconds=True))
+    with pytest.raises(InvalidConfigurationError, match="codex_retries"):
+        _load(tmp_path, overrides=RuntimeOverrides(codex_retries=True))
 
 
 def test_unsupported_float_inputs_fail_without_conversion_or_echo(
@@ -1151,7 +1245,7 @@ def test_values_paths_errors_and_output_are_secret_safe(
     ("flag", "expected"),
     (
         ("--help", "Career Agent Workbench"),
-        ("--version", "career-agent-workbench 2.0.0"),
+        ("--version", "career-agent-workbench 2.1.0"),
     ),
 )
 def test_help_and_version_need_no_configuration(

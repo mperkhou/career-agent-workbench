@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +11,11 @@ from career_agent_workbench.errors import (
     LlmError,
     LlmTimeoutError,
     ModelFailureSubtype,
+    ModelResponseContentState,
+    ModelResponseErrorPresence,
+    ModelResponseErrorType,
+    ModelResponseFinishReason,
+    ModelResponseSummary,
     NonRetryableModelError,
     OllamaError,
     OllamaTimeoutError,
@@ -44,6 +51,7 @@ def _retryable_error(subtype: ModelFailureSubtype) -> RetryableModelError:
         _retryable_error(ModelFailureSubtype.TRANSPORT_READ),
         _retryable_error(ModelFailureSubtype.TRANSPORT_PROTOCOL),
         _retryable_error(ModelFailureSubtype.EMPTY_COMPLETION),
+        _retryable_error(ModelFailureSubtype.EMBEDDED_TRANSIENT),
         LlmTimeoutError(),
     ],
 )
@@ -126,6 +134,248 @@ async def test_retryable_failure_exhaustion_never_exceeds_configured_budget(
     assert len(failure) == 1
     assert failure[0]["failure_subtype"] == "transient_http"
     assert failure[0]["category"] == "model"
+
+
+@pytest.mark.asyncio
+async def test_owned_attempt_deadline_cancels_cleans_up_and_then_succeeds(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = 0
+    cleaned = asyncio.Event()
+
+    async def operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            try:
+                await asyncio.sleep(60)
+            finally:
+                cleaned.set()
+        return "accepted"
+
+    async def no_backoff(_delay: float) -> None:
+        return None
+
+    assert (
+        await run_model_operation(
+            operation,
+            retries=1,
+            stage=WorkflowStage.V1_CORE,
+            sleep=no_backoff,
+            timeout_seconds=0.01,
+        )
+        == "accepted"
+    )
+    assert calls == 2
+    assert cleaned.is_set()
+    events = _diagnostics(capsys.readouterr().err)
+    assert [item["attempt"] for item in events if item["event"] == "attempt_start"] == [
+        1,
+        2,
+    ]
+    assert (
+        next(item for item in events if item["event"] == "timeout")["failure_subtype"]
+        == "timeout"
+    )
+
+
+@pytest.mark.asyncio
+async def test_owned_attempt_deadline_exhausts_exactly_three_boundaries() -> None:
+    calls = 0
+
+    async def operation() -> None:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(60)
+
+    async def no_backoff(_delay: float) -> None:
+        return None
+
+    with pytest.raises(LlmTimeoutError):
+        await run_model_operation(
+            operation,
+            retries=2,
+            stage=WorkflowStage.V1_JOD,
+            sleep=no_backoff,
+            timeout_seconds=0.005,
+        )
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_owned_deadline_remains_failure_if_operation_suppresses_cancellation() -> (
+    None
+):
+    async def operation() -> str:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            return "late result"
+
+    with pytest.raises(LlmTimeoutError):
+        await run_model_operation(
+            operation,
+            retries=0,
+            stage=WorkflowStage.V1_CORE,
+            timeout_seconds=0.005,
+        )
+
+
+@pytest.mark.asyncio
+async def test_owned_deadline_uses_provider_appropriate_timeout_type() -> None:
+    async def operation() -> None:
+        await asyncio.sleep(60)
+
+    with pytest.raises(OllamaTimeoutError):
+        await run_model_operation(
+            operation,
+            retries=0,
+            stage=WorkflowStage.V1_CORE,
+            timeout_seconds=0.005,
+            timeout_error_factory=OllamaTimeoutError,
+        )
+
+
+@pytest.mark.asyncio
+async def test_inner_timeout_error_and_external_cancellation_are_not_reclassified(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def inner_timeout() -> None:
+        raise TimeoutError("synthetic operation-owned timeout")
+
+    with pytest.raises(TimeoutError, match="operation-owned"):
+        await run_model_operation(
+            inner_timeout,
+            retries=2,
+            stage=WorkflowStage.V2_CRITIQUE,
+            timeout_seconds=1,
+        )
+    events = _diagnostics(capsys.readouterr().err)
+    assert not any(item["event"] in {"timeout", "retry_decision"} for item in events)
+
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def blocked() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cleaned.set()
+
+    task = asyncio.create_task(
+        run_model_operation(
+            blocked,
+            retries=2,
+            stage=WorkflowStage.V2_CRITIQUE,
+            timeout_seconds=30,
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_is_outside_the_attempt_deadline() -> None:
+    calls = 0
+    completed_backoff = False
+
+    async def operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(60)
+        assert completed_backoff is True
+        return "accepted"
+
+    async def backoff(_delay: float) -> None:
+        nonlocal completed_backoff
+        await asyncio.sleep(0.02)
+        completed_backoff = True
+
+    assert (
+        await run_model_operation(
+            operation,
+            retries=1,
+            stage=WorkflowStage.V1_EXPERIENCE,
+            sleep=backoff,
+            timeout_seconds=0.005,
+        )
+        == "accepted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_closed_response_summary_is_emitted_without_raw_provider_data(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    summary = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=429,
+        error_type=ModelResponseErrorType.RATE_LIMIT,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    calls = 0
+
+    async def operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RetryableModelError(
+                subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+                retry_after_seconds=0,
+                response_summary=summary,
+            )
+        return "accepted"
+
+    async def no_backoff(_delay: float) -> None:
+        return None
+
+    assert (
+        await run_model_operation(
+            operation,
+            retries=1,
+            stage=WorkflowStage.V1_CORE,
+            sleep=no_backoff,
+        )
+        == "accepted"
+    )
+    rendered = capsys.readouterr().err
+    event = next(
+        item for item in _diagnostics(rendered) if item["event"] == "retry_decision"
+    )
+    assert event["response_summary"] == summary.as_dict()
+    for marker in (
+        "RAW-PROMPT-MARKER",
+        "RAW-RESPONSE-MARKER",
+        "PRIVATE-PROVIDER-MARKER",
+        "SECRET-KEY-MARKER",
+        "/private/operator/path",
+    ):
+        assert marker not in rendered
+
+    evidence = tmp_path / "ordered.jsonl"
+    evidence.touch(mode=0o600)
+    with evidence.open("w", encoding="utf-8") as stream:
+        stream.write(rendered)
+    assert evidence.stat().st_mode & 0o777 == 0o600
+    retained = _diagnostics(evidence.read_text(encoding="utf-8"))
+    assert [item["event"] for item in retained] == [
+        "attempt_start",
+        "attempt_elapsed",
+        "retry_decision",
+        "attempt_start",
+        "attempt_elapsed",
+        "attempt_completion",
+    ]
+    assert retained[2]["response_summary"] == summary.as_dict()
 
 
 @pytest.mark.asyncio

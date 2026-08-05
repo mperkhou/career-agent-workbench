@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from career_agent_workbench import (
     cli_paths,
     jod_cleaner_audit,
     resume_refinement_cli,
+    workflow_retry,
     webapp,
 )
 from career_agent_workbench.application_state import (
@@ -543,12 +545,31 @@ def test_second_pass_config_only_is_model_and_state_free(
             2,
             2,
         ),
+        (
+            (
+                RetryableModelError(
+                    subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+                    retry_after_seconds=0,
+                ),
+            ),
+            2,
+            2,
+        ),
         ((LlmError("synthetic"),), 1, None),
         (
             (
                 NonRetryableModelError(
                     subtype=ModelFailureSubtype.PERMANENT_HTTP,
                     http_status=400,
+                ),
+            ),
+            1,
+            None,
+        ),
+        (
+            (
+                NonRetryableModelError(
+                    subtype=ModelFailureSubtype.EMBEDDED_PERMANENT,
                 ),
             ),
             1,
@@ -562,6 +583,19 @@ def test_second_pass_uses_typed_retry_contract(
     expected_calls: int,
     expected_attempt: int | None,
 ) -> None:
+    observed_deadlines: list[float | None] = []
+    real_run_model_operation = resume_refinement_cli.run_model_operation
+
+    async def recorded_run_model_operation(operation, **kwargs):
+        observed_deadlines.append(kwargs.get("timeout_seconds"))
+        return await real_run_model_operation(operation, **kwargs)
+
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "run_model_operation",
+        recorded_run_model_operation,
+    )
+
     class FakeClient:
         model = "synthetic-model"
 
@@ -604,6 +638,57 @@ def test_second_pass_uses_typed_retry_contract(
         result = runner.run(request)
         assert result.model_metadata["attempt"] == expected_attempt
     assert client.calls == expected_calls
+    assert observed_deadlines == [600]
+
+
+def test_second_pass_owned_deadline_retries_one_boundary_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        model = "synthetic-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.cleaned = False
+
+        async def generate_text(self, _prompt):
+            self.calls += 1
+            if self.calls == 1:
+                try:
+                    await asyncio.sleep(60)
+                finally:
+                    self.cleaned = True
+            return '{"synthetic": true}'
+
+        async def aclose(self):
+            return None
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        resume_refinement_cli,
+        "build_llm_client",
+        lambda *_a, **_k: client,
+    )
+    monkeypatch.setattr(workflow_retry, "DEFAULT_WORKFLOW_BACKOFF_SECONDS", 0)
+    runner = resume_refinement_cli._ConfiguredLlmRunner(
+        Settings(),
+        api_model="synthetic-model",
+        retries=1,
+        timeout_seconds=0.01,
+    )
+    result = runner.run(
+        ModelRequest(
+            prompt="Synthetic prompt.",
+            config=CodexModelConfig(
+                model="synthetic-model",
+                reasoning_effort="",
+                workflow="refinement",
+            ),
+        )
+    )
+    assert result.model_metadata["attempt"] == 2
+    assert client.calls == 2
+    assert client.cleaned is True
 
 
 @pytest.mark.parametrize(

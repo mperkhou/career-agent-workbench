@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import TextIO
 
-from career_agent_workbench.errors import ModelFailureSubtype
+from career_agent_workbench.errors import ModelFailureSubtype, ModelResponseSummary
 
 INVOCATION_SOURCE_ENV = "CAREER_AGENT_WORKBENCH_INVOCATION_SOURCE"
 MAX_DIAGNOSTIC_BYTES = 4_096
@@ -144,6 +144,7 @@ def attempt_event(
     retry: bool | None = None,
     category: FailureCategory | None = None,
     failure_subtype: ModelFailureSubtype | None = None,
+    response_summary: ModelResponseSummary | None = None,
 ) -> dict[str, object]:
     """Build one bounded attempt lifecycle event without content values."""
 
@@ -179,6 +180,16 @@ def attempt_event(
         if not isinstance(failure_subtype, ModelFailureSubtype):
             raise ValueError("Workflow diagnostic event is invalid.")
         result["failure_subtype"] = failure_subtype.value
+    if response_summary is not None:
+        if (
+            not isinstance(response_summary, ModelResponseSummary)
+            or event not in {DiagnosticEvent.RETRY_DECISION, DiagnosticEvent.FAILURE}
+            or failure_subtype is None
+            or failure_subtype is ModelFailureSubtype.TIMEOUT
+            or category is not FailureCategory.MODEL
+        ):
+            raise ValueError("Workflow diagnostic event is invalid.")
+        result["response_summary"] = response_summary.as_dict()
     return result
 
 
@@ -249,6 +260,8 @@ def sanitized_diagnostic_event(value: object) -> dict[str, object] | None:
         allowed.add("category")
     if "failure_subtype" in value:
         allowed.add("failure_subtype")
+    if "response_summary" in value:
+        allowed.add("response_summary")
     if set(value) != allowed:
         return None
     try:
@@ -268,6 +281,11 @@ def sanitized_diagnostic_event(value: object) -> dict[str, object] | None:
                 None
                 if value.get("failure_subtype") is None
                 else ModelFailureSubtype(value["failure_subtype"])
+            ),
+            response_summary=(
+                None
+                if "response_summary" not in value
+                else ModelResponseSummary.from_mapping(value["response_summary"])
             ),
         )
     except (TypeError, ValueError):

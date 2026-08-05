@@ -17,7 +17,14 @@ from career_agent_workbench.application_state import (
     ResumeVariantWrite,
 )
 from career_agent_workbench.config import RuntimeConfig, Settings, WorkspacePaths
-from career_agent_workbench.errors import ModelFailureSubtype
+from career_agent_workbench.errors import (
+    ModelFailureSubtype,
+    ModelResponseContentState,
+    ModelResponseErrorPresence,
+    ModelResponseErrorType,
+    ModelResponseFinishReason,
+    ModelResponseSummary,
+)
 from career_agent_workbench.webapp_archive_runtime import create_app
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
@@ -469,7 +476,7 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
-    create_app(runtime, project_root=ROOT)
+    app = create_app(runtime, project_root=ROOT)
     run = archived._create_background_action_run(title="Synthetic action")
     diagnostic = configuration_event(
         stage=WorkflowStage.V1_CORE,
@@ -492,7 +499,16 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
         total_attempts=3,
         retry=True,
         category=FailureCategory.MODEL,
-        failure_subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+        failure_subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        response_summary=ModelResponseSummary(
+            http_status=200,
+            error_presence=ModelResponseErrorPresence.CHOICE,
+            error_code=503,
+            error_type=ModelResponseErrorType.PROVIDER_UNAVAILABLE,
+            finish_reason=ModelResponseFinishReason.ERROR,
+            choices_count=1,
+            content_state=ModelResponseContentState.PRESENT,
+        ),
     )
     captured: dict[str, object] = {}
 
@@ -554,7 +570,7 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
     assert "secret-marker" not in rendered
     assert "operator/path" not in rendered
     assert "synthetic-job" not in rendered
-    assert "transient http" in rendered
+    assert "embedded transient" in rendered
     persisted = "".join(
         path.read_text(encoding="utf-8")
         for path in (runtime.paths.tmp_dir / "workflow-status").glob("*.json")
@@ -567,6 +583,22 @@ def test_archived_make_status_ignores_raw_output_and_inherits_tuning(
     stored_retry = next(
         event
         for event in stored["events"]
-        if event.get("failure_subtype") == "transient_http"
+        if event.get("failure_subtype") == "embedded_transient"
     )
     assert stored_retry["category"] == "model"
+    assert stored_retry["response_summary"]["error_type"] == "provider_unavailable"
+    full_payload = app.test_client().get("/actions/status?detail=full").get_json()
+    full_rendered = json.dumps(full_payload, sort_keys=True)
+    assert "embedded transient" in full_rendered
+    assert full_payload["runs"][0]["full_detail"] is True
+    assert (
+        len(full_payload["runs"][0]["messages"])
+        == full_payload["runs"][0]["message_count"]
+    )
+    assert "secret-marker" not in full_rendered
+    compact = json.dumps(
+        archived.background_action_snapshots(full=False),
+        sort_keys=True,
+    )
+    assert "Synthetic action" in compact
+    assert "provider_unavailable" not in compact

@@ -45,9 +45,11 @@ from career_agent_workbench.cli_paths import (
 from career_agent_workbench.config import WorkspaceMember, WorkspacePaths
 from career_agent_workbench.errors import (
     LlmError,
+    LlmTimeoutError,
     ModelFailureSubtype,
     ModelTimeoutError,
     OllamaError,
+    OllamaTimeoutError,
     WorkflowError,
     model_failure_subtype,
 )
@@ -285,12 +287,16 @@ async def _with_retries(
     retries: int,
     stage: WorkflowStage = WorkflowStage.V1_CORE,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    timeout_seconds: float | None = None,
+    timeout_error_factory: Callable[[], ModelTimeoutError] = LlmTimeoutError,
 ) -> T:
     return await run_model_operation(
         operation,
         retries=retries,
         stage=stage,
         sleep=sleep,
+        timeout_seconds=timeout_seconds,
+        timeout_error_factory=timeout_error_factory,
     )
 
 
@@ -306,6 +312,8 @@ async def _generate_one(
     artifact_dir: Path | None,
     max_jod_chars: int,
     retries: int,
+    timeout_seconds: float | None = None,
+    timeout_error_factory: Callable[[], ModelTimeoutError] = LlmTimeoutError,
 ) -> bool:
     snapshot = candidate.snapshot
     job_id = candidate.job_id
@@ -330,6 +338,8 @@ async def _generate_one(
             lambda: core_client.generate_json(core_prompt),
             retries=retries,
             stage=WorkflowStage.V1_CORE,
+            timeout_seconds=timeout_seconds,
+            timeout_error_factory=timeout_error_factory,
         ),
     )
     resume = _run_stage(
@@ -352,6 +362,8 @@ async def _generate_one(
             lambda: jod_client.generate_json(target_prompt),
             retries=retries,
             stage=WorkflowStage.V1_JOD,
+            timeout_seconds=timeout_seconds,
+            timeout_error_factory=timeout_error_factory,
         ),
     )
     jod = _run_stage(
@@ -387,6 +399,8 @@ async def _generate_one(
                 lambda: jod_client.generate_text(prompt),
                 retries=retries,
                 stage=WorkflowStage.V1_EXPERIENCE,
+                timeout_seconds=timeout_seconds,
+                timeout_error_factory=timeout_error_factory,
             ),
         )
         resume = _run_stage(
@@ -623,6 +637,12 @@ async def main_async(argv: Sequence[str] | None = None) -> int:
                         artifact_dir=artifact_dir,
                         max_jod_chars=args.max_jod_chars,
                         retries=retries,
+                        timeout_seconds=timeout_seconds,
+                        timeout_error_factory=(
+                            OllamaTimeoutError
+                            if provider == "ollama"
+                            else LlmTimeoutError
+                        ),
                     )
                     processed += int(generated)
                 except Exception as error:

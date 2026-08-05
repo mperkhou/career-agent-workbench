@@ -22,7 +22,12 @@ from career_agent_workbench.cli_paths import (
 )
 from career_agent_workbench.codex_cli import CodexModelConfig, ModelRequest, ModelResult
 from career_agent_workbench.config import Settings, WorkspaceMember
-from career_agent_workbench.errors import ModelFailureSubtype, NonRetryableModelError
+from career_agent_workbench.errors import (
+    LlmTimeoutError,
+    ModelFailureSubtype,
+    NonRetryableModelError,
+    OllamaTimeoutError,
+)
 from career_agent_workbench.llm import build_llm_client
 from career_agent_workbench.resume_refinement import refine_resume_for_job
 from career_agent_workbench.workflow_diagnostics import (
@@ -77,6 +82,12 @@ class _ConfiguredLlmRunner:
                     invoke,
                     retries=self._retries,
                     stage=WorkflowStage.V2_CRITIQUE,
+                    timeout_seconds=self._timeout_seconds,
+                    timeout_error_factory=(
+                        OllamaTimeoutError
+                        if self._settings.llm_provider.casefold().strip() == "ollama"
+                        else LlmTimeoutError
+                    ),
                 )
                 return response, client.model, attempt_count
             finally:

@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from career_agent_workbench.errors import ModelFailureSubtype
+from career_agent_workbench.errors import (
+    ModelFailureSubtype,
+    ModelResponseContentState,
+    ModelResponseErrorPresence,
+    ModelResponseErrorType,
+    ModelResponseFinishReason,
+    ModelResponseSummary,
+)
 from career_agent_workbench.workflow_diagnostics import (
     ConfigurationSource,
     DiagnosticEvent,
@@ -187,6 +194,35 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
         category=FailureCategory.MODEL,
         failure_subtype=ModelFailureSubtype.TRANSIENT_HTTP,
     )
+    response_summary = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.CHOICE,
+        error_code=503,
+        error_type=ModelResponseErrorType.PROVIDER_UNAVAILABLE,
+        finish_reason=ModelResponseFinishReason.ERROR,
+        choices_count=1,
+        content_state=ModelResponseContentState.PRESENT,
+    )
+    with pytest.raises(ValueError, match="diagnostic event"):
+        attempt_event(
+            event=DiagnosticEvent.ATTEMPT_START,
+            stage=WorkflowStage.V1_JOD,
+            attempt=1,
+            total_attempts=2,
+            category=FailureCategory.MODEL,
+            failure_subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            response_summary=response_summary,
+        )
+    detailed = attempt_event(
+        event=DiagnosticEvent.RETRY_DECISION,
+        stage=WorkflowStage.V1_JOD,
+        attempt=1,
+        total_attempts=2,
+        retry=True,
+        category=FailureCategory.MODEL,
+        failure_subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        response_summary=response_summary,
+    )
     legacy_capture = captured_diagnostic_event(
         legacy,
         timestamp="2042-04-10T10:00:01+00:00",
@@ -195,10 +231,16 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
         typed,
         timestamp="2042-04-10T10:00:02+00:00",
     )
+    detailed_capture = captured_diagnostic_event(
+        detailed,
+        timestamp="2042-04-10T10:00:03+00:00",
+    )
     assert legacy_capture is not None
     assert typed_capture is not None
     assert "failure_subtype" not in legacy_capture
     assert typed_capture["failure_subtype"] == "transient_http"
+    assert detailed_capture is not None
+    assert detailed_capture["response_summary"] == response_summary.as_dict()
     assert status_event_message(legacy_capture) == "10:00:01 v1 core failed (model)."
     assert (
         status_event_message(typed_capture)
@@ -213,6 +255,20 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
     )
     assert (
         captured_diagnostic_event(
+            {**detailed, "response_summary": {"raw_response": "unsafe"}},
+            timestamp="2042-04-10T10:00:03+00:00",
+        )
+        is None
+    )
+    assert (
+        captured_diagnostic_event(
+            {key: value for key, value in detailed.items() if key != "failure_subtype"},
+            timestamp="2042-04-10T10:00:03+00:00",
+        )
+        is None
+    )
+    assert (
+        captured_diagnostic_event(
             {**typed, "raw_response": "unsafe"},
             timestamp="2042-04-10T10:00:03+00:00",
         )
@@ -220,12 +276,16 @@ def test_status_store_accepts_legacy_model_and_optional_subtype(
     )
 
     payload = _run("f" * 32, started_at="2042-04-10T10:00:00+00:00")
-    payload["events"] = [legacy_capture, typed_capture]
+    payload["events"] = [legacy_capture, typed_capture, detailed_capture]
     store = WorkflowStatusStore(_tmp_member(tmp_path))
     store.save(payload)
     recovered = store.load()[0]["events"]
     assert "failure_subtype" not in recovered[0]
     assert recovered[1]["failure_subtype"] == "transient_http"
+    assert recovered[2]["response_summary"] == response_summary.as_dict()
+    rendered = json.dumps(recovered, sort_keys=True)
+    for marker in ("unsafe", "raw_response", "/private", "provider-message"):
+        assert marker not in rendered
 
 
 def test_status_attempt_messages_render_optional_validated_subtype() -> None:

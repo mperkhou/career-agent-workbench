@@ -768,6 +768,14 @@ async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
     tmp_path: Path,
 ) -> None:
     module = _load_script("application_resume_generate_drafts.py")
+    real_run_model_operation = module.run_model_operation
+    deadline_calls: list[tuple[object, float | None]] = []
+
+    async def recorded_run_model_operation(operation, **kwargs):
+        deadline_calls.append((kwargs["stage"], kwargs.get("timeout_seconds")))
+        return await real_run_model_operation(operation, **kwargs)
+
+    monkeypatch.setattr(module, "run_model_operation", recorded_run_model_operation)
     job_id = "fictional-ats-state"
     description = "Responsibilities: Build reliable fictional systems."
     database = tmp_path / "state" / "applications.sqlite3"
@@ -849,7 +857,7 @@ async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
             return {}
 
         async def generate_text(self, _prompt):
-            pytest.fail("empty experience inventory requested a provider response")
+            return "Synthetic rewritten evidence."
 
     monkeypatch.setattr(
         module,
@@ -884,7 +892,17 @@ async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
     monkeypatch.setattr(
         module,
         "experience_jobs_for_jod_bullet_rewrite",
-        lambda _resume: (),
+        lambda _resume: ({"order": 1},),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_experience_job_bullet_rewrite_prompt",
+        lambda **_k: "synthetic experience prompt",
+    )
+    monkeypatch.setattr(
+        module,
+        "replace_experience_job_bullets_from_text_response",
+        lambda **_k: resume,
     )
     monkeypatch.setattr(
         module,
@@ -918,6 +936,7 @@ async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
             artifact_dir=None,
             max_jod_chars=1_000,
             retries=0,
+            timeout_seconds=12.5,
         )
         is True
     )
@@ -926,6 +945,11 @@ async def test_first_draft_materializes_real_ats_diagnostics_for_real_store(
     assert tuple(variant.variant_key for variant in after.variants) == ("v1",)
     assert after.application.selected_resume_variant == "v1"
     assert after.application.resume_variant_selection_mode == "auto"
+    assert deadline_calls == [
+        (module.WorkflowStage.V1_CORE, 12.5),
+        (module.WorkflowStage.V1_JOD, 12.5),
+        (module.WorkflowStage.V1_EXPERIENCE, 12.5),
+    ]
     expected_diagnostics = json.loads(json.dumps(raw_diagnostics, allow_nan=False))
     with sqlite3.connect(database) as connection:
         stored_json = connection.execute(
@@ -988,8 +1012,23 @@ async def test_first_draft_retries_only_typed_timeout_initial_plus_two() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        RetryableModelError(
+            subtype=ModelFailureSubtype.TRANSIENT_HTTP,
+            http_status=503,
+            retry_after_seconds=0,
+        ),
+        RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            retry_after_seconds=0,
+        ),
+    ],
+)
 async def test_first_draft_retries_typed_api_transient_with_exact_boundaries(
     capsys: pytest.CaptureFixture[str],
+    error: RetryableModelError,
 ) -> None:
     module = _load_script("application_resume_generate_drafts.py")
     attempts = 0
@@ -999,11 +1038,7 @@ async def test_first_draft_retries_typed_api_transient_with_exact_boundaries(
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise RetryableModelError(
-                subtype=ModelFailureSubtype.TRANSIENT_HTTP,
-                http_status=503,
-                retry_after_seconds=0,
-            )
+            raise error
         return "accepted"
 
     async def sleep(delay: float) -> None:
@@ -1021,7 +1056,7 @@ async def test_first_draft_retries_typed_api_transient_with_exact_boundaries(
     assert all(event["total_attempts"] == 3 for event in starts)
     decisions = [event for event in events if event["event"] == "retry_decision"]
     assert [event["retry"] for event in decisions] == [True, True]
-    assert all(event["failure_subtype"] == "transient_http" for event in decisions)
+    assert all(event["failure_subtype"] == error.subtype.value for event in decisions)
     assert sleeps == [0.0, 0.0]
 
 

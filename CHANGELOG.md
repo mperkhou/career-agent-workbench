@@ -63,10 +63,10 @@
   attempt one of three. No v1 or later stage was stored, the deterministic
   baseline and four empty snapshot directories remain unchanged, and its
   sanitized log passed leakage review.
-- Added offline-only P03U/G03U to enforce the configured timeout as a genuine
-  per-attempt v1/v2 wall-clock deadline and classify validated HTTP-200 embedded
-  provider errors plus unusable missing/null/empty completions through the
-  existing single workflow retry budget. The amendment preserves exact
+- Implemented the offline P03U repair: the configured timeout is now a genuine
+  per-attempt v1/v2 wall-clock deadline, and validated HTTP-200 embedded
+  provider errors plus unusable missing/null/empty completions now flow through
+  the existing single workflow retry budget. The repair preserves exact
   `retry_count + 1` boundaries, additive legacy-compatible content-free
   diagnostics, the ATS persistence regression, and unchanged manual/
   highlighting behavior while leaving the generalized durable-diagnostics

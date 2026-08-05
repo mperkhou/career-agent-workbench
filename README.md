@@ -690,12 +690,24 @@ A retry count is the number of retries after the initial attempt, so a retry
 count of `2` allows three total attempts. API-backed v1 and v2 retry only typed
 timeouts and the closed transient allowlist: HTTP 408, 409, 425, 429, 500, 502,
 503, or 504; remote connect, read, or protocol interruption; and a valid empty
-completion. Ollama-backed v1 and v2 remain timeout-only. Manual pass and
+completion. They also recover from validated transient provider errors embedded
+in an HTTP-200 top-level or choice envelope and from unusable missing, null, or
+empty completion shapes when no permanent signal is present. Permanent or
+contradictory embedded errors, malformed envelopes, and invalid generation JSON
+do not retry. Ollama-backed v1 and v2 remain timeout-only. Manual pass and
 highlighting remain Codex-subprocess-timeout-only. Codex nonzero exits and
 missing or invalid output do not retry. Invalid generated JSON, schema, policy
 or evidence rejection, rendering, ATS, state, artifact, and configuration
 failures fail that row without consuming another workflow attempt. Batch
 commands keep later rows isolated and preserve earlier successful writes.
+
+The configured v1/v2 timeout is a wall-clock deadline for each logical model
+attempt, not only an HTTP transport-inactivity timeout. Each retry receives a
+fresh deadline, backoff happens outside it, and the workflow-created API client
+uses one internal request attempt so `retry_count + 1` is also the maximum
+provider-boundary count for that logical operation. Cancellation closes the
+in-flight request before the retry decision; the transport timeout remains a
+defense-in-depth boundary.
 
 Each workflow has a configuration-only preflight that resolves normal CLI,
 Make, process-environment, private-dotenv, compatibility, and default layers,
@@ -714,7 +726,11 @@ label, reasoning effort or `inherit`, timeout, retry and total-attempt counts,
 source layer (`cli`, `make`, `process`, `private_dotenv`, or `default`), and a
 workspace-configured boolean.
 Attempt events retain the stable broad failure category and may carry a closed,
-optional `failure_subtype`; legacy events omit that additive field.
+optional `failure_subtype`; legacy events omit that additive field. Relevant
+retry-decision and terminal-failure events may also carry a closed response
+summary containing only validated status, error-location/type/code,
+finish-reason, choice-count, and content-state labels. It never retains raw
+provider text, content, headers, identifiers, endpoints, prompts, or responses.
 
 Make passes the six unprefixed workflow knobs
 `FIRST_DRAFT_LLM_TIMEOUT_SECONDS`, `FIRST_DRAFT_LLM_RETRIES`,

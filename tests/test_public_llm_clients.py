@@ -18,6 +18,11 @@ from career_agent_workbench.errors import (
     LlmError,
     LlmTimeoutError,
     ModelFailureSubtype,
+    ModelResponseContentState,
+    ModelResponseErrorPresence,
+    ModelResponseErrorType,
+    ModelResponseFinishReason,
+    ModelResponseSummary,
     NonRetryableModelError,
     OllamaError,
     OllamaTimeoutError,
@@ -28,6 +33,8 @@ from career_agent_workbench.llm import build_llm_client, llm_settings_label
 from career_agent_workbench.models import JobSearchQuery
 from career_agent_workbench.ollama import OllamaClient
 from career_agent_workbench.providers import LinkedInPublicJobsProvider
+from career_agent_workbench.workflow_diagnostics import WorkflowStage
+from career_agent_workbench.workflow_retry import run_model_operation
 
 _HTTP_LOGGER_NAMES = (
     "httpx",
@@ -71,6 +78,21 @@ class _BlockingAsyncStream(httpx.AsyncByteStream):
         self.started.set()
         await self.release.wait()
         yield b"{}"
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _DelayedTrackedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes], *, delay_seconds: float) -> None:
+        self._chunks = chunks
+        self._delay_seconds = delay_seconds
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            await asyncio.sleep(self._delay_seconds)
+            yield chunk
 
     async def aclose(self) -> None:
         self.closed = True
@@ -836,15 +858,10 @@ def test_generation_redirects_are_one_request_permanent_failures() -> None:
 @pytest.mark.parametrize(
     "response_object",
     [
-        {},
-        {"choices": None},
-        {"choices": []},
+        {"choices": "invalid"},
         {"choices": [None]},
-        {"choices": [{}]},
-        {"choices": [{"message": None}]},
-        {"choices": [{"message": {}}]},
-        {"choices": [{"message": {"content": None}}]},
         {"choices": [{"message": {"content": 7}}]},
+        {"choices": [{"finish_reason": 7, "message": {"content": "text"}}]},
     ],
 )
 def test_api_malformed_completion_is_not_retried(
@@ -880,6 +897,54 @@ def test_api_malformed_completion_is_not_retried(
     asyncio.run(scenario())
     assert calls == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "empty_response",
+    [
+        {},
+        {"choices": None},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"content": None}}]},
+    ],
+)
+def test_api_missing_null_and_empty_completion_remain_finitely_retryable(
+    empty_response: dict[str, object],
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json=empty_response)
+        return _api_response("Synthetic recovery")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=2,
+        retry_backoff_seconds=0,
+        sleep=sleep,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        assert await client.generate_text("synthetic prompt") == "Synthetic recovery"
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 2
+    assert sleeps == [0.0]
 
 
 def test_api_valid_empty_completion_retains_finite_retry() -> None:
@@ -1294,6 +1359,16 @@ def test_workflow_api_client_does_not_hide_non_timeout_retries(
             subtype=ModelFailureSubtype.PERMANENT_HTTP,
             http_status=200,
         ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_PERMANENT,
+        ),
+        lambda: NonRetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        ),
+        lambda: RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            retry_after_seconds=121,
+        ),
     ],
 )
 def test_typed_model_failure_rejects_contradictory_metadata(operation) -> None:
@@ -1312,6 +1387,33 @@ def test_typed_transient_http_contract_accepts_only_allowlisted_statuses(
     )
     assert error.http_status == status
     assert error.retry_after_seconds == 0
+
+
+def test_response_summary_rejects_contradictory_closed_metadata() -> None:
+    with pytest.raises(ValueError, match="response metadata"):
+        ModelResponseSummary(
+            http_status=200,
+            error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+            error_code=400,
+            error_type=ModelResponseErrorType.RATE_LIMIT,
+            finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+            choices_count=None,
+            content_state=ModelResponseContentState.UNAVAILABLE,
+        )
+    permanent = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=400,
+        error_type=ModelResponseErrorType.PERMANENT_REQUEST,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    with pytest.raises(ValueError, match="failure metadata"):
+        RetryableModelError(
+            subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+            response_summary=permanent,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1503,3 +1605,354 @@ def test_api_generation_rejects_nonstandard_json_without_retry(
 
     asyncio.run(scenario())
     assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("error_object", "expected_type"),
+    [
+        ({"code": 429}, ModelResponseErrorType.RATE_LIMIT),
+        ({"code": 502}, ModelResponseErrorType.SERVER),
+        ({"code": 503}, ModelResponseErrorType.PROVIDER_UNAVAILABLE),
+        ({"code": 504}, ModelResponseErrorType.UPSTREAM_TIMEOUT),
+        (
+            {"metadata": {"error_type": "timeout"}},
+            ModelResponseErrorType.UPSTREAM_TIMEOUT,
+        ),
+        (
+            {"metadata": {"error_type": "provider_unavailable"}},
+            ModelResponseErrorType.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            {"metadata": {"error_type": "provider_overloaded"}},
+            ModelResponseErrorType.OVERLOADED,
+        ),
+        (
+            {
+                "type": "upstream_timeout",
+                "metadata": {"error_type": "timeout"},
+            },
+            ModelResponseErrorType.UPSTREAM_TIMEOUT,
+        ),
+    ],
+)
+def test_api_embedded_transient_top_level_error_retries_with_closed_summary(
+    error_object: dict[str, object],
+    expected_type: ModelResponseErrorType,
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200,
+                headers={"retry-after": "999"},
+                json={
+                    "error": {
+                        **error_object,
+                        "message": "RAW-ERROR-MESSAGE",
+                        "provider": "PRIVATE-PROVIDER-MARKER",
+                    }
+                },
+            )
+        return _api_response("Synthetic recovery")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=2,
+        sleep=sleep,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        assert await client.generate_text("synthetic prompt") == "Synthetic recovery"
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 2
+    assert sleeps == [120.0]
+
+    summary = ModelResponseSummary(
+        http_status=200,
+        error_presence=ModelResponseErrorPresence.TOP_LEVEL,
+        error_code=(
+            error_object.get("code") if type(error_object.get("code")) is int else None
+        ),
+        error_type=expected_type,
+        finish_reason=ModelResponseFinishReason.UNAVAILABLE,
+        choices_count=None,
+        content_state=ModelResponseContentState.UNAVAILABLE,
+    )
+    error = RetryableModelError(
+        subtype=ModelFailureSubtype.EMBEDDED_TRANSIENT,
+        retry_after_seconds=120,
+        response_summary=summary,
+    )
+    rendered = f"{error!r} {error}"
+    assert error.retry_after_seconds == 120
+    assert "RAW-ERROR-MESSAGE" not in rendered
+    assert "PRIVATE-PROVIDER-MARKER" not in rendered
+
+
+def test_api_choice_embedded_error_requires_error_finish_reason() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "error": {"metadata": {"error_type": "provider_unavailable"}},
+                    "finish_reason": "error",
+                    "message": {"content": "partial invalid {"},
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {"content": "Synthetic recovery"},
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+    ]
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        response = httpx.Response(200, json=responses[calls])
+        calls += 1
+        return response
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=2,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        assert await client.generate_text("synthetic prompt") == "Synthetic recovery"
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 2
+
+    contradictory = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=3,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "error": {"metadata": {"error_type": "timeout"}},
+                            "finish_reason": "stop",
+                            "message": {"content": "partial content"},
+                        }
+                    ]
+                },
+            )
+        ),
+    )
+
+    async def contradictory_scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await contradictory.generate_text("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.MALFORMED_ENVELOPE
+        await contradictory.aclose()
+
+    asyncio.run(contradictory_scenario())
+
+
+@pytest.mark.parametrize(
+    "error_object",
+    [
+        {"code": 400, "metadata": {"error_type": "invalid_request_error"}},
+        {"type": "policy_error"},
+        {"metadata": {"error_type": "context_length_exceeded"}},
+    ],
+)
+def test_api_permanent_embedded_error_wins_over_partial_content(
+    error_object: dict[str, object],
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "error": error_object,
+                "choices": [
+                    {
+                        "message": {"content": "{invalid generated JSON"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=3,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await client.generate_json("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.EMBEDDED_PERMANENT
+        assert captured.value.response_summary is not None
+        assert captured.value.response_summary.content_state is (
+            ModelResponseContentState.PRESENT
+        )
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "error_object",
+    [
+        {},
+        {"type": "unknown-private-provider-type"},
+        {"code": "429", "metadata": {"error_type": "timeout"}},
+        {
+            "type": "rate_limit",
+            "metadata": {"error_type": "invalid_request_error"},
+        },
+        {"code": 400, "metadata": {"error_type": "timeout"}},
+        {"metadata": "invalid"},
+    ],
+)
+def test_api_malformed_or_contradictory_embedded_error_never_retries(
+    error_object: dict[str, object],
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"error": error_object})
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=3,
+        retry_attempts=5,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(NonRetryableModelError) as captured:
+            await client.generate_text("synthetic prompt")
+        assert captured.value.subtype is ModelFailureSubtype.MALFORMED_ENVELOPE
+        rendered = f"{captured.value!r} {captured.value}"
+        assert "unknown-private-provider-type" not in rendered
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 1
+
+
+def test_outer_deadline_closes_delayed_stream_then_uses_next_boundary() -> None:
+    calls = 0
+    first_stream = _DelayedTrackedStream(
+        [b'{"choices":[', b'{"message":', b'{"content":"late"}}]}'],
+        delay_seconds=0.02,
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, stream=first_stream)
+        return _api_response("Synthetic recovery")
+
+    client = ApiLlmClient(
+        base_url="https://api.example.invalid",
+        model="synthetic-model",
+        api_key="synthetic-key",
+        timeout_seconds=0.05,
+        retry_attempts=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def no_backoff(_delay: float) -> None:
+        return None
+
+    async def scenario() -> None:
+        assert (
+            await run_model_operation(
+                lambda: client.generate_text("synthetic prompt"),
+                retries=1,
+                stage=WorkflowStage.V1_EXPERIENCE,
+                sleep=no_backoff,
+                timeout_seconds=0.03,
+            )
+            == "Synthetic recovery"
+        )
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 2
+    assert first_stream.closed is True
+
+
+def test_workflow_client_embedded_transient_uses_exact_outer_http_budget() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={"error": {"metadata": {"error_type": "timeout"}}},
+        )
+
+    settings = replace(
+        Settings(),
+        llm_api_base_url="https://api.example.invalid",
+        llm_api_model="synthetic-api-model",
+        llm_api_key="synthetic-key",
+        llm_provider="api",
+    )
+    client = build_llm_client(settings, transport=httpx.MockTransport(handler))
+
+    async def no_backoff(_delay: float) -> None:
+        return None
+
+    async def scenario() -> None:
+        with pytest.raises(RetryableModelError) as captured:
+            await run_model_operation(
+                lambda: client.generate_text("synthetic prompt"),
+                retries=2,
+                stage=WorkflowStage.V1_JOD,
+                sleep=no_backoff,
+                timeout_seconds=1,
+            )
+        assert captured.value.subtype is ModelFailureSubtype.EMBEDDED_TRANSIENT
+        await client.aclose()
+
+    asyncio.run(scenario())
+    assert calls == 3

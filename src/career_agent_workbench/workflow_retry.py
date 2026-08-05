@@ -10,10 +10,12 @@ from typing import TypeVar
 
 from career_agent_workbench.errors import (
     LlmError,
+    LlmTimeoutError,
     ModelFailureSubtype,
     ModelTimeoutError,
     OllamaError,
     RetryableModelError,
+    TypedModelError,
     model_failure_subtype,
 )
 from career_agent_workbench.workflow_diagnostics import (
@@ -29,12 +31,23 @@ MAX_WORKFLOW_BACKOFF_SECONDS = 60.0
 DEFAULT_WORKFLOW_BACKOFF_SECONDS = 1.0
 
 
+class _InnerOperationTimeout(Exception):
+    """Keep an operation-owned ``TimeoutError`` distinct from our deadline."""
+
+    __slots__ = ("error",)
+
+    def __init__(self, error: TimeoutError) -> None:
+        self.error = error
+
+
 async def run_model_operation(
     operation: Callable[[], Awaitable[T]],
     *,
     retries: int,
     stage: WorkflowStage,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    timeout_seconds: float | None = None,
+    timeout_error_factory: Callable[[], ModelTimeoutError] = LlmTimeoutError,
 ) -> T:
     """Run one logical operation with exactly one visible retry owner."""
 
@@ -51,7 +64,11 @@ async def run_model_operation(
         )
         started = monotonic()
         try:
-            result = await operation()
+            result = await _run_with_deadline(
+                operation,
+                timeout_seconds=timeout_seconds,
+                timeout_error_factory=timeout_error_factory,
+            )
         except Exception as error:
             elapsed = monotonic() - started
             if not isinstance(error, (LlmError, OllamaError, ModelTimeoutError)):
@@ -94,6 +111,9 @@ async def run_model_operation(
             retry = isinstance(error, (RetryableModelError, ModelTimeoutError)) and (
                 attempt < total_attempts
             )
+            response_summary = (
+                error.response_summary if isinstance(error, TypedModelError) else None
+            )
             emit_diagnostic(
                 attempt_event(
                     event=DiagnosticEvent.RETRY_DECISION,
@@ -103,6 +123,7 @@ async def run_model_operation(
                     retry=retry,
                     category=category,
                     failure_subtype=subtype,
+                    response_summary=response_summary,
                 )
             )
             if retry:
@@ -116,6 +137,7 @@ async def run_model_operation(
                     total_attempts=total_attempts,
                     category=category,
                     failure_subtype=subtype,
+                    response_summary=response_summary,
                 )
             )
             raise
@@ -139,6 +161,46 @@ async def run_model_operation(
         )
         return result
     raise AssertionError("unreachable retry loop")
+
+
+async def _run_with_deadline(
+    operation: Callable[[], Awaitable[T]],
+    *,
+    timeout_seconds: float | None,
+    timeout_error_factory: Callable[[], ModelTimeoutError],
+) -> T:
+    if timeout_seconds is None:
+        return await operation()
+    if (
+        type(timeout_seconds) not in {int, float}
+        or not math.isfinite(float(timeout_seconds))
+        or float(timeout_seconds) <= 0
+    ):
+        raise ValueError("Model execution deadline is invalid.")
+
+    deadline = asyncio.timeout(float(timeout_seconds))
+    try:
+        async with deadline:
+            try:
+                result = await operation()
+            except TimeoutError as error:
+                raise _InnerOperationTimeout(error) from None
+    except _InnerOperationTimeout as wrapped:
+        raise wrapped.error from None
+    except TimeoutError:
+        raise _owned_timeout_error(timeout_error_factory) from None
+    if deadline.expired():
+        raise _owned_timeout_error(timeout_error_factory) from None
+    return result
+
+
+def _owned_timeout_error(
+    timeout_error_factory: Callable[[], ModelTimeoutError],
+) -> ModelTimeoutError:
+    timeout_error = timeout_error_factory()
+    if not isinstance(timeout_error, ModelTimeoutError):
+        raise ValueError("Model execution deadline is invalid.")
+    return timeout_error
 
 
 def _workflow_retry_delay(error: BaseException, attempt: int) -> float:

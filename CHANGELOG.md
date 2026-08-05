@@ -94,6 +94,12 @@
   config-only Make commands against the same retained synthetic workspace,
   with no delegation, generated wrapper, or live provider/model/Codex
   authority.
+- Recorded the revision-16 direct preflight PASS and the user's explicit live-
+  subphase approval. Revision 17 authorizes exactly one supervisor-owned
+  `demo-platform-001` force-v1 followed conditionally by v2, regular manual,
+  and highlighting; it must stop at the first failed or ambiguous stage,
+  retain the source-time sanitized log and all successful snapshot/PDF sets,
+  and permits no wrapper or operator rerun.
 
 ## [2.0.0] - In progress
 

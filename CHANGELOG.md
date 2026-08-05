@@ -80,6 +80,13 @@
   highlighting sequence. The future run remains stop-first-failure, retains
   all four untracked snapshot/PDF sets and a complete source-time sanitized
   log, and cannot enter P04 or claim README evidence unless all stages pass.
+- Recorded the revision-14 preflight false negative: the fresh task stopped
+  before configuration or workspace access because its task-binding validator
+  incorrectly required a standalone scalar match for an ID stored inside the
+  tracker note. After confirming zero Make, provider, model, Codex, network, or
+  workspace activity, revision 15 authorizes one corrected model-free
+  preflight in the user's designated original implementor task. This one-time
+  task-reuse exception still stops at G03V and grants no live-run authority.
 
 ## [2.0.0] - In progress
 
